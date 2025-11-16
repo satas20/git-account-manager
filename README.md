@@ -16,5 +16,4 @@ What I created in this step:
 Next steps you might want:
 
 - Add `thiserror`, `anyhow`, `tokio`, and `reqwest` to `Cargo.toml` if you plan to implement async adapters and richer error handling.
-- Implement concrete use cases and add unit tests for domain logic.
 - Wire the TUI with `ratatui` and command-line argument parsing with `clap`.

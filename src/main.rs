@@ -1,17 +1,48 @@
+// Small starter: clap CLI + optional ratatui demo to exercise dependencies.
 mod domain;
 mod adapters;
 
+use clap::{Parser, Subcommand};
 use crate::domain::entity::Profile;
 
-fn main() {
-    // Minimal demo: construct a Profile from the domain layer and print it.
-    let p = Profile::new("work", "work@example.com");
-    println!("Created profile: {} <{}> (host={})", p.name, p.email, p.auth_host);
-
-    // Instantiate adapter stubs (no-op for now).
-    let _sys = adapters::system_io::LocalSystemIO::new();
-    let _gh = adapters::github::GithubAdapter::new();
-    let _tui: adapters::tui::TuiAdapter = adapters::tui::TuiAdapter;
-
-    // In future: wire these together to run actual use cases.
+#[derive(Parser, Debug)]
+#[command(name = "accmngr", about = "AccMngr - Git Account Manager (skeleton)")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
 }
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Run the minimal TUI demo
+    Tui,
+    /// Print a demo profile
+    Profile { name: String, email: String },
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Some(Commands::Tui) => {
+            // run the TUI adapter
+            let tui = adapters::tui::TuiAdapter::new();
+            if let Err(e) = tui.run() {
+                eprintln!("TUI error: {}", e);
+            }
+        }
+        Some(Commands::Profile { name, email }) => {
+            let p = Profile::new(name, email);
+            println!("Profile: {} <{}> (host={})", p.name, p.email, p.auth_host);
+        }
+        None => {
+            // default behaviour: show a sample profile
+            let p = Profile::new("work", "work@example.com");
+            println!("Created profile: {} <{}> (host={})", p.name, p.email, p.auth_host);
+        }
+    }
+
+    Ok(())
+}
+
