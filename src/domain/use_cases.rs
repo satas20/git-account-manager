@@ -123,4 +123,22 @@ impl<'a> ProfilesManager<'a> {
         self.upsert_profile(&key, rec)?;
         Ok(key)
     }
+
+    /// Query the local git configuration for a key (e.g. "user.name" or "user.email").
+    /// Returns `None` when `git` is not available or the value is empty.
+    pub fn get_git_config(&self, key: &str) -> Option<String> {
+        use std::process::Command;
+        Command::new("git")
+            .args(["config", key])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if s.is_empty() { None } else { Some(s) }
+                } else {
+                    None
+                }
+            })
+    }
 }
