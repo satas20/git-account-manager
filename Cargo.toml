@@ -20,6 +20,15 @@ serde_json = "1"
 # Async traits helper
 async-trait = "0.1"
 
+# Open the system browser cross-platform
+webbrowser = "0.6"
+
+# small helper for url-encoding the authorize URL
+urlencoding = "2"
+
+# Load local .env files during development
+dotenvy = "0.15"
+
 # CLI and TUI
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.20"

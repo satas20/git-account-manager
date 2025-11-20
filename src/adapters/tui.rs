@@ -1,5 +1,6 @@
 // Ratatui-driven TUI adapter implementing a small menu and internal state.
 use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crate::domain::ports::AuthProviderPort;
 
 pub struct TuiAdapter;
 
@@ -21,8 +22,11 @@ impl TuiAdapter {
             Profiles,
         }
 
-        let mut state = ScreenState::MainMenu;
-        let mut message: Option<String> = None;
+    let mut state = ScreenState::MainMenu;
+    let mut message: Option<String> = None;
+
+    // Optional receiver for an in-flight OAuth task result (token or error)
+    let mut oauth_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>> = None;
 
         // setup terminal
         enable_raw_mode()?;
@@ -110,8 +114,50 @@ impl TuiAdapter {
                         },
                         ScreenState::AddMenu => match key_event.code {
                             KeyCode::Char('1') => {
-                                // select GitHub
-                                message = Some("Selected: GitHub (not implemented)".to_string());
+                                // select GitHub -> start async OAuth flow in background
+                                message = Some("Starting GitHub OAuth... (browser should open)".to_string());
+
+                                // create channel and spawn async task to perform the flow
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                oauth_rx = Some(rx);
+
+                                // spawn on the existing Tokio runtime (main uses #[tokio::main])
+                                let adapter = crate::adapters::github::GithubAdapter::new();
+                                tokio::spawn(async move {
+                                    // 1) Run OAuth and get token
+                                    match adapter.start_oauth_flow_async("default").await {
+                                        Ok(token) => {
+                                            // 2) Fetch user profile from GitHub
+                                            match adapter.fetch_profile(&token).await {
+                                                Ok(profile) => {
+                                                    // 3) Persist profile using ProfilesManager + LocalSystemIO
+                                                    let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                                    match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
+                                                        Ok(mgr) => {
+                                                            match mgr.create_from_entity(&profile, Some("github".to_string()), None) {
+                                                                Ok(key) => {
+                                                                    let _ = tx.send(Ok(key));
+                                                                }
+                                                                Err(e) => {
+                                                                    let _ = tx.send(Err(format!("Failed to save profile: {}", e)));
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            let _ = tx.send(Err(format!("Failed to create profiles manager: {}", e)));
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx.send(Err(format!("Failed to fetch profile: {}", e)));
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Err(e));
+                                        }
+                                    }
+                                });
                             }
                             KeyCode::Char('b') | KeyCode::Esc => {
                                 state = ScreenState::MainMenu;
@@ -132,6 +178,27 @@ impl TuiAdapter {
                     // ignore other events for now (Mouse, Resize, Focus, Paste, ...)
                 }
             }
+
+                // Poll for OAuth result (non-blocking)
+                if let Some(rx) = &oauth_rx {
+                    match rx.try_recv() {
+                        Ok(Ok(token)) => {
+                            message = Some(format!("GitHub OAuth succeeded. token={} (stored in memory)", token));
+                            oauth_rx = None;
+                        }
+                        Ok(Err(err)) => {
+                            message = Some(format!("GitHub OAuth failed: {}", err));
+                            oauth_rx = None;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            // still waiting
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            message = Some("GitHub OAuth task disconnected unexpectedly".to_string());
+                            oauth_rx = None;
+                        }
+                    }
+                }
         }
 
         // restore terminal

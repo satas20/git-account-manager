@@ -3,6 +3,8 @@ mod domain;
 mod adapters;
 
 use clap::{Parser, Subcommand};
+// load local .env for development (no-op if .env not present)
+use dotenvy::dotenv;
 use crate::domain::entity::Profile;
 
 #[derive(Parser, Debug)]
@@ -22,6 +24,11 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // If a `.env` file exists in the project root, load it into the process env.
+    // This makes the development flow easier so you can run `source .env` or
+    // just rely on `.env` being present.
+    dotenv().ok();
+
     let cli = Cli::parse();
 
     match &cli.command {
