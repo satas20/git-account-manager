@@ -22,6 +22,10 @@ impl SystemIOPort for LocalSystemIO {
     }
 
     fn read_file(&self, path: &str) -> Result<String, String> {
-        fs::read_to_string(path).map_err(|e| e.to_string())
+        std::fs::read_to_string(path).map_err(|e| e.to_string())
+    }
+
+    fn file_exists(&self, path: &str) -> bool {
+        std::path::Path::new(path).exists()
     }
 }

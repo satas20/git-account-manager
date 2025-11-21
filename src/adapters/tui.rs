@@ -166,7 +166,7 @@ impl TuiAdapter {
                                                 match mgr.get_profile(key) {
                                                     Ok(Some(rec)) => {
                                                         let mut disp = format!("{}: {} <{}>", i+1, rec.name, rec.email);
-                                                        if (git_name.as_deref().map(|s| s == rec.name).unwrap_or(false)) ||
+                                                        if (git_name.as_deref().map(|s| s == rec.name).unwrap_or(false)) &&
                                                            (git_email.as_deref().map(|s| s == rec.email).unwrap_or(false)) {
                                                             disp.push_str(" - current");
                                                         }
@@ -206,37 +206,75 @@ impl TuiAdapter {
                                 tokio::spawn(async move {
                                     // 1) Run OAuth and get token
                                     match adapter.start_oauth_flow_async("default").await {
-                                        Ok(token) => {
-                                            // 2) Fetch user profile from GitHub
-                                            match adapter.fetch_profile(&token).await {
-                                                Ok(profile) => {
-                                                    // 3) Persist profile using ProfilesManager + LocalSystemIO
-                                                    let storage = crate::adapters::system_io::LocalSystemIO::new();
-                                                    match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
-                                                        Ok(mgr) => {
-                                                            match mgr.create_from_entity(&profile, Some("github".to_string()), None) {
-                                                                Ok(key) => {
-                                                                    let _ = tx.send(Ok(key));
-                                                                }
-                                                                Err(e) => {
-                                                                    let _ = tx.send(Err(format!("Failed to save profile: {}", e)));
+                                            Ok(token) => {
+                                                // 2) Fetch user profile from GitHub
+                                                match adapter.fetch_profile(&token).await {
+                                                    Ok(profile) => {
+                                                        // 3) Persist profile using ProfilesManager + LocalSystemIO
+                                                        let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                                        match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
+                                                            Ok(mgr) => {
+                                                                match mgr.create_from_entity(&profile, Some("github".to_string()), None) {
+                                                                    Ok(key) => {
+                                                                        // 4) store token encrypted in profile
+                                                                        if let Err(e) = mgr.set_token_for_profile(&key, &token) {
+                                                                            let _ = tx.send(Err(format!("Saved profile but failed to store token: {}", e)));
+                                                                            return;
+                                                                        }
+
+                                                                        // 5) generate SSH keypair for profile under config dir
+                                                                        if let Err(e) = mgr.generate_and_assign_ssh_key(&key) {
+                                                                            let _ = tx.send(Err(format!("Saved profile but failed to generate SSH key: {}", e)));
+                                                                            return;
+                                                                        }
+
+                                                                        // 6) Upload public key to GitHub
+                                                                        match mgr.get_public_key_content(&key) {
+                                                                            Ok(pub_key) => {
+                                                                                match adapter.upload_ssh_key(&token, &pub_key).await {
+                                                                                    Ok(key_id) => {
+                                                                                        // Update profile with key_id
+                                                                                        if let Ok(Some(mut rec)) = mgr.get_profile(&key) {
+                                                                                            rec.ssh_key_id = Some(key_id);
+                                                                                            if let Err(e) = mgr.upsert_profile(&key, rec) {
+                                                                                                let _ = tx.send(Err(format!("Uploaded key but failed to save key ID: {}", e)));
+                                                                                                return;
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                    Err(e) => {
+                                                                                        let _ = tx.send(Err(format!("Generated key but failed to upload to GitHub: {}", e)));
+                                                                                        return;
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            Err(e) => {
+                                                                                let _ = tx.send(Err(format!("Generated key but failed to read public key: {}", e)));
+                                                                                return;
+                                                                            }
+                                                                        }
+
+                                                                        let _ = tx.send(Ok(key));
+                                                                    }
+                                                                    Err(e) => {
+                                                                        let _ = tx.send(Err(format!("Failed to save profile: {}", e)));
+                                                                    }
                                                                 }
                                                             }
-                                                        }
-                                                        Err(e) => {
-                                                            let _ = tx.send(Err(format!("Failed to create profiles manager: {}", e)));
+                                                            Err(e) => {
+                                                                let _ = tx.send(Err(format!("Failed to create profiles manager: {}", e)));
+                                                            }
                                                         }
                                                     }
-                                                }
-                                                Err(e) => {
-                                                    let _ = tx.send(Err(format!("Failed to fetch profile: {}", e)));
+                                                    Err(e) => {
+                                                        let _ = tx.send(Err(format!("Failed to fetch profile: {}", e)));
+                                                    }
                                                 }
                                             }
+                                            Err(e) => {
+                                                let _ = tx.send(Err(e));
+                                            }
                                         }
-                                        Err(e) => {
-                                            let _ = tx.send(Err(e));
-                                        }
-                                    }
                                 });
                             }
                             KeyCode::Char('b') | KeyCode::Esc => {
@@ -274,10 +312,40 @@ impl TuiAdapter {
                                         message = None;
                                     }
                                     KeyCode::Char('1') => {
-                                        // switch profile (not implemented) — show status and return
+                                        // switch profile
                                         if sel < profiles_list.len() {
                                             let key = &profiles_list[sel];
-                                            message = Some(format!("Switch profile selected: {} (not implemented)", key));
+                                            let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                            match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
+                                                Ok(mgr) => match mgr.switch_profile(key) {
+                                                    Ok(_) => {
+                                                        message = Some(format!("Switched to profile: {}", key));
+                                                        // refresh display to show "current"
+                                                        profiles_display.clear();
+                                                        let git_name = mgr.get_git_config("user.name");
+                                                        let git_email = mgr.get_git_config("user.email");
+                                                        for (i, k) in profiles_list.iter().enumerate() {
+                                                            match mgr.get_profile(k) {
+                                                                Ok(Some(rec)) => {
+                                                                    let mut disp = format!("{}: {} <{}>", i+1, rec.name, rec.email);
+                                                                    if (git_name.as_deref().map(|s| s == rec.name).unwrap_or(false)) &&
+                                                                       (git_email.as_deref().map(|s| s == rec.email).unwrap_or(false)) {
+                                                                        disp.push_str(" - current");
+                                                                    }
+                                                                    profiles_display.push(disp);
+                                                                }
+                                                                _ => profiles_display.push(format!("{}: {}", i+1, k)),
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        message = Some(format!("Failed to switch profile: {}", e));
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    message = Some(format!("Failed to create profiles manager: {}", e));
+                                                }
+                                            }
                                         } else {
                                             message = Some("Invalid selection".to_string());
                                         }
@@ -287,43 +355,61 @@ impl TuiAdapter {
                                         // remove profile
                                         if sel < profiles_list.len() {
                                             let key = profiles_list[sel].clone();
+                                            message = Some(format!("Removing profile {}...", key));
+                                            
+                                            // We need to do async work (delete from GitHub) but we are in sync loop.
+                                            // Spawn a task to do the removal and send result back via channel.
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            oauth_rx = Some(rx); // reuse the oauth_rx channel for status updates
+                                            
                                             let storage = crate::adapters::system_io::LocalSystemIO::new();
-                                            match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
-                                                Ok(mgr) => match mgr.remove_profile(&key) {
-                                                    Ok(true) => {
-                                                        message = Some(format!("Removed profile: {}", key));
-                                                        // reload profiles
-                                                        match mgr.list_keys() {
-                                                            Ok(list) => profiles_list = list,
-                                                            Err(e) => { profiles_list = Vec::new(); message = Some(format!("Removed but failed reload: {}", e)); }
-                                                        }
-                                                        // rebuild display
-                                                        profiles_display.clear();
-                                                        let git_name = mgr.get_git_config("user.name");
-                                                        let git_email = mgr.get_git_config("user.email");
-                                                        for (i, key) in profiles_list.iter().enumerate() {
-                                                            match mgr.get_profile(key) {
-                                                                Ok(Some(rec)) => {
-                                                                    let mut disp = format!("{}: {} <{}>", i+1, rec.name, rec.email);
-                                                                    if (git_name.as_deref().map(|s| s == rec.name).unwrap_or(false)) ||
-                                                                       (git_email.as_deref().map(|s| s == rec.email).unwrap_or(false)) {
-                                                                        disp.push_str(" - current");
-                                                                    }
-                                                                    profiles_display.push(disp);
+                                            // Clone key for the closure
+                                            let key_clone = key.clone();
+                                            
+                                            tokio::spawn(async move {
+                                                let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                                match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
+                                                    Ok(mgr) => {
+                                                        // 1. Try to delete from GitHub if we have token and key_id
+                                                        if let Ok(Some(rec)) = mgr.get_profile(&key_clone) {
+                                                            if let (Some(key_id), Ok(Some(token))) = (rec.ssh_key_id, mgr.get_auth_token(&key_clone)) {
+                                                                let adapter = crate::adapters::github::GithubAdapter::new();
+                                                                if let Err(e) = adapter.delete_ssh_key(&token, key_id).await {
+                                                                    // Log error but continue to remove local profile?
+                                                                    // Or fail? User said "remove it form the git account also".
+                                                                    // Let's report error but proceed with local removal or stop?
+                                                                    // Usually better to try best effort or warn.
+                                                                    // For now, let's fail if API fails so user knows.
+                                                                    let _ = tx.send(Err(format!("Failed to delete key from GitHub: {}", e)));
+                                                                    return;
                                                                 }
-                                                                _ => profiles_display.push(format!("{}: {}", i+1, key)),
                                                             }
                                                         }
+
+                                                        // 2. Remove locally (files and config)
+                                                        match mgr.remove_profile(&key_clone) {
+                                                            Ok(true) => {
+                                                                let _ = tx.send(Ok(format!("Removed profile: {}", key_clone)));
+                                                            }
+                                                            Ok(false) => {
+                                                                let _ = tx.send(Err(format!("Profile not found: {}", key_clone)));
+                                                            }
+                                                            Err(e) => {
+                                                                let _ = tx.send(Err(format!("Failed to remove profile: {}", e)));
+                                                            }
+                                                        }
+                                                    },
+                                                    Err(e) => {
+                                                        let _ = tx.send(Err(format!("Failed to create profiles manager: {}", e)));
                                                     }
-                                                    Ok(false) => { message = Some(format!("Profile not found: {}", key)); }
-                                                    Err(e) => { message = Some(format!("Failed to remove profile: {}", e)); }
-                                                },
-                                                Err(e) => { message = Some(format!("Failed to create profiles manager: {}", e)); }
-                                            }
+                                                }
+                                            });
+                                            
+                                            profiles_action = ProfilesAction::None;
                                         } else {
                                             message = Some("Invalid selection".to_string());
+                                            profiles_action = ProfilesAction::None;
                                         }
-                                        profiles_action = ProfilesAction::None;
                                     }
                                     _ => {}
                                 },
@@ -344,19 +430,52 @@ impl TuiAdapter {
                 // Poll for OAuth result (non-blocking)
                 if let Some(rx) = &oauth_rx {
                     match rx.try_recv() {
-                        Ok(Ok(token)) => {
-                            message = Some(format!("GitHub OAuth succeeded. token={} (stored in memory)", token));
+                        Ok(Ok(msg)) => {
+                            // Task succeeded.
+                            // If we were adding a profile, switch to Profiles screen.
+                            if state == ScreenState::AddMenu {
+                                state = ScreenState::Profiles;
+                                profiles_action = ProfilesAction::None;
+                                message = Some(format!("Profile saved: {}", msg));
+                            } else {
+                                // If we were removing, just show the message
+                                message = Some(msg);
+                            }
                             oauth_rx = None;
+
+                            // Reload profiles list
+                            let storage = crate::adapters::system_io::LocalSystemIO::new();
+                            if let Ok(mgr) = crate::domain::use_cases::ProfilesManager::new(&storage, None) {
+                                if let Ok(list) = mgr.list_keys() {
+                                    profiles_list = list;
+                                    profiles_display.clear();
+                                    let git_name = mgr.get_git_config("user.name");
+                                    let git_email = mgr.get_git_config("user.email");
+                                    for (i, key) in profiles_list.iter().enumerate() {
+                                        match mgr.get_profile(key) {
+                                            Ok(Some(rec)) => {
+                                                let mut disp = format!("{}: {} <{}>", i+1, rec.name, rec.email);
+                                                if (git_name.as_deref().map(|s| s == rec.name).unwrap_or(false)) &&
+                                                   (git_email.as_deref().map(|s| s == rec.email).unwrap_or(false)) {
+                                                    disp.push_str(" - current");
+                                                }
+                                                profiles_display.push(disp);
+                                            }
+                                            _ => profiles_display.push(format!("{}: {}", i+1, key)),
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Ok(Err(err)) => {
-                            message = Some(format!("GitHub OAuth failed: {}", err));
+                            message = Some(format!("Operation failed: {}", err));
                             oauth_rx = None;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => {
                             // still waiting
                         }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            message = Some("GitHub OAuth task disconnected unexpectedly".to_string());
+                            message = Some("Background task disconnected unexpectedly".to_string());
                             oauth_rx = None;
                         }
                     }

@@ -32,7 +32,7 @@ impl GithubAdapter {
         // state token (static for now; in prod, generate random string)
         let state = "state123";
 
-        let scope = "read:user user:email";
+        let scope = "read:user user:email write:public_key";
         let auth_url = format!(
             "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope={}&state={}",
             urlencoding::encode(&client_id),
@@ -133,8 +133,67 @@ impl GithubAdapter {
 
 #[async_trait]
 impl AuthProviderPort for GithubAdapter {
-    async fn upload_ssh_key(&self, _account: &str, _public_key: &str) -> Result<(), String> {
-        // Placeholder - a real implementation would call the GitHub API to upload the key.
+    async fn upload_ssh_key(&self, account: &str, public_key: &str) -> Result<u64, String> {
+        // account is treated as the access token here
+        let token = account;
+
+        #[derive(serde::Serialize)]
+        struct KeyBody<'a> {
+            title: &'a str,
+            key: &'a str,
+        }
+
+        let body = KeyBody {
+            title: "git-acc-mngr-key",
+            key: public_key,
+        };
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post("https://api.github.com/user/keys")
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "gitt_account_manager")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to upload SSH key: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Failed to upload SSH key (status {}): {}", status, text));
+        }
+
+        #[derive(Deserialize)]
+        struct KeyResp {
+            id: u64,
+        }
+        let key_resp: KeyResp = resp.json().await.map_err(|e| format!("Invalid key response: {}", e))?;
+
+        Ok(key_resp.id)
+    }
+
+    async fn delete_ssh_key(&self, token: &str, key_id: u64) -> Result<(), String> {
+        let client = reqwest::Client::new();
+        let url = format!("https://api.github.com/user/keys/{}", key_id);
+        let resp = client
+            .delete(&url)
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "gitt_account_manager")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to delete SSH key: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Failed to delete SSH key (status {}): {}", status, text));
+        }
+
         Ok(())
     }
 
@@ -171,8 +230,8 @@ impl AuthProviderPort for GithubAdapter {
         let ur: UserResp = resp.json().await.map_err(|e| format!("Invalid user response: {}", e))?;
 
         let username = ur.login.or(ur.name).unwrap_or_else(|| "unknown".to_string());
-        let email = ur.email.unwrap_or_else(|| "".to_string());
-
+        let email = ur.email.unwrap_or_else(|| "".to_string()); //TODO email is not saved correctly 
+        print!("Fetched GitHub user: {} <{}>", username, email);
         Ok(Profile::new(&username, &email))
     }
 }

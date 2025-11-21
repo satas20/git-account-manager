@@ -7,7 +7,11 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait AuthProviderPort {
     /// Upload a public SSH key for a given account identifier.
-    async fn upload_ssh_key(&self, account: &str, public_key: &str) -> Result<(), String>;
+    /// Returns the GitHub ID of the created key.
+    async fn upload_ssh_key(&self, account: &str, public_key: &str) -> Result<u64, String>;
+
+    /// Delete an SSH key by its ID.
+    async fn delete_ssh_key(&self, token: &str, key_id: u64) -> Result<(), String>;
 
     /// Start an OAuth flow and return an access token.
     async fn start_oauth_flow(&self, account: &str) -> Result<String, String>;
@@ -16,10 +20,13 @@ pub trait AuthProviderPort {
     async fn fetch_profile(&self, token: &str) -> Result<Profile, String>;
 }
 
-pub trait SystemIOPort {
+pub trait SystemIOPort: Send + Sync {
     /// Write the string content to the target path atomically.
     fn write_file(&self, path: &str, content: &str) -> Result<(), String>;
 
     /// Read the file at path and return its contents as a String.
     fn read_file(&self, path: &str) -> Result<String, String>;
+
+    /// Check if a file exists at the given path.
+    fn file_exists(&self, path: &str) -> bool;
 }
