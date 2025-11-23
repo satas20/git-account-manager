@@ -206,9 +206,9 @@ impl TuiAdapter {
                                 tokio::spawn(async move {
                                     // 1) Run OAuth and get token
                                     match adapter.start_oauth_flow_async("default").await {
-                                            Ok(token) => {
-                                                // 2) Fetch user profile from GitHub
-                                                match adapter.fetch_profile(&token).await {
+                                            Ok((token, refresh_token)) => {
+                                                // 2) Fetch user profile from GitHub (using direct token since profile doesn't exist yet)
+                                                match adapter.fetch_profile_with_token(&token).await {
                                                     Ok(profile) => {
                                                         // 3) Persist profile using ProfilesManager + LocalSystemIO
                                                         let storage = crate::adapters::system_io::LocalSystemIO::new();
@@ -222,16 +222,24 @@ impl TuiAdapter {
                                                                             return;
                                                                         }
 
+                                                                        // 4b) store refresh token if present
+                                                                        if let Some(rt) = refresh_token {
+                                                                            if let Err(e) = mgr.set_refresh_token_for_profile(&key, &rt) {
+                                                                                let _ = tx.send(Err(format!("Saved profile but failed to store refresh token: {}", e)));
+                                                                                return;
+                                                                            }
+                                                                        }
+
                                                                         // 5) generate SSH keypair for profile under config dir
                                                                         if let Err(e) = mgr.generate_and_assign_ssh_key(&key) {
                                                                             let _ = tx.send(Err(format!("Saved profile but failed to generate SSH key: {}", e)));
                                                                             return;
                                                                         }
 
-                                                                        // 6) Upload public key to GitHub
+                                                                        // 6) Upload public key to GitHub (using direct token method)
                                                                         match mgr.get_public_key_content(&key) {
                                                                             Ok(pub_key) => {
-                                                                                match adapter.upload_ssh_key(&token, &pub_key).await {
+                                                                                match adapter.upload_ssh_key_with_token(&token, &pub_key).await {
                                                                                     Ok(key_id) => {
                                                                                         // Update profile with key_id
                                                                                         if let Ok(Some(mut rec)) = mgr.get_profile(&key) {
@@ -315,28 +323,12 @@ impl TuiAdapter {
                                         // switch profile
                                         if sel < profiles_list.len() {
                                             let key = &profiles_list[sel];
+                                            let key_clone = key.clone();
                                             let storage = crate::adapters::system_io::LocalSystemIO::new();
                                             match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
-                                                Ok(mgr) => match mgr.switch_profile(key) {
+                                                Ok(mgr) => match mgr.switch_profile(&key_clone) {
                                                     Ok(_) => {
-                                                        message = Some(format!("Switched to profile: {}", key));
-                                                        // refresh display to show "current"
-                                                        profiles_display.clear();
-                                                        let git_name = mgr.get_git_config("user.name");
-                                                        let git_email = mgr.get_git_config("user.email");
-                                                        for (i, k) in profiles_list.iter().enumerate() {
-                                                            match mgr.get_profile(k) {
-                                                                Ok(Some(rec)) => {
-                                                                    let mut disp = format!("{}: {} <{}>", i+1, rec.name, rec.email);
-                                                                    if (git_name.as_deref().map(|s| s == rec.name).unwrap_or(false)) &&
-                                                                       (git_email.as_deref().map(|s| s == rec.email).unwrap_or(false)) {
-                                                                        disp.push_str(" - current");
-                                                                    }
-                                                                    profiles_display.push(disp);
-                                                                }
-                                                                _ => profiles_display.push(format!("{}: {}", i+1, k)),
-                                                            }
-                                                        }
+                                                        message = Some(format!("git and ssh configured using profile {}", key_clone));
                                                     }
                                                     Err(e) => {
                                                         message = Some(format!("Failed to switch profile: {}", e));
@@ -362,7 +354,6 @@ impl TuiAdapter {
                                             let (tx, rx) = std::sync::mpsc::channel();
                                             oauth_rx = Some(rx); // reuse the oauth_rx channel for status updates
                                             
-                                            let storage = crate::adapters::system_io::LocalSystemIO::new();
                                             // Clone key for the closure
                                             let key_clone = key.clone();
                                             
@@ -370,11 +361,12 @@ impl TuiAdapter {
                                                 let storage = crate::adapters::system_io::LocalSystemIO::new();
                                                 match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
                                                     Ok(mgr) => {
-                                                        // 1. Try to delete from GitHub if we have token and key_id
+                                                        // 1. Try to delete from GitHub if we have key_id
                                                         if let Ok(Some(rec)) = mgr.get_profile(&key_clone) {
-                                                            if let (Some(key_id), Ok(Some(token))) = (rec.ssh_key_id, mgr.get_auth_token(&key_clone)) {
+                                                            if let Some(key_id) = rec.ssh_key_id {
                                                                 let adapter = crate::adapters::github::GithubAdapter::new();
-                                                                if let Err(e) = adapter.delete_ssh_key(&token, key_id).await {
+                                                                // Use the new profile-based API that handles token refresh
+                                                                if let Err(e) = adapter.delete_ssh_key(&key_clone, key_id).await {
                                                                     // Log error but continue to remove local profile?
                                                                     // Or fail? User said "remove it form the git account also".
                                                                     // Let's report error but proceed with local removal or stop?

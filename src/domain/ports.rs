@@ -6,18 +6,21 @@ use async_trait::async_trait;
 /// Auth provider port - async methods for network-bound operations.
 #[async_trait]
 pub trait AuthProviderPort {
-    /// Upload a public SSH key for a given account identifier.
+    /// Upload a public SSH key for a given profile.
     /// Returns the GitHub ID of the created key.
-    async fn upload_ssh_key(&self, account: &str, public_key: &str) -> Result<u64, String>;
+    async fn upload_ssh_key(&self, profile_key: &str, public_key: &str) -> Result<u64, String>;
 
-    /// Delete an SSH key by its ID.
-    async fn delete_ssh_key(&self, token: &str, key_id: u64) -> Result<(), String>;
+    /// Delete an SSH key by its ID for a given profile.
+    async fn delete_ssh_key(&self, profile_key: &str, key_id: u64) -> Result<(), String>;
 
-    /// Start an OAuth flow and return an access token.
-    async fn start_oauth_flow(&self, account: &str) -> Result<String, String>;
+    /// Start an OAuth flow and return an access token and optional refresh token.
+    async fn start_oauth_flow(&self, account: &str) -> Result<(String, Option<String>), String>;
 
-    /// Fetch profile information (username/email/etc) for the authenticated user.
-    async fn fetch_profile(&self, token: &str) -> Result<Profile, String>;
+    /// Fetch profile information (username/email/etc) for a given profile.
+    async fn fetch_profile(&self, profile_key: &str) -> Result<Profile, String>;
+
+    /// Refresh an access token using a refresh token.
+    async fn refresh_access_token(&self, refresh_token: &str) -> Result<(String, Option<String>), String>;
 }
 
 pub trait SystemIOPort: Send + Sync {

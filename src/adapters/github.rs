@@ -13,12 +13,56 @@ impl GithubAdapter {
         Self {}
     }
 
+    /// Helper method to make authenticated GitHub API requests with automatic token refresh.
+    /// If the request returns 401, it will attempt to refresh the token and retry once.
+    async fn api_call_with_refresh<F, Fut, T>(
+        &self,
+        profile_key: &str,
+        api_call: F,
+    ) -> Result<T, String>
+    where
+        F: Fn(String) -> Fut,
+        Fut: std::future::Future<Output = Result<T, String>>,
+    {
+        // Load the ProfilesManager to get tokens
+        let storage = crate::adapters::system_io::LocalSystemIO::new();
+        let mgr = crate::domain::use_cases::ProfilesManager::new(&storage, None)
+            .map_err(|e| format!("Failed to create profiles manager: {}", e))?;
+
+        // Get current access token
+        let token: String = mgr.get_auth_token(profile_key)?
+            .ok_or_else(|| format!("No access token found for profile: {}", profile_key))?;
+
+        // Try the API call with current token
+        match api_call(token.clone()).await {
+            Ok(result) => Ok(result),
+            Err(e) if e.contains("status 401") || e.contains("Unauthorized") => {
+                // Token expired, try to refresh
+                let refresh_token = mgr.get_refresh_token(profile_key)?
+                    .ok_or_else(|| format!("No refresh token found for profile: {}", profile_key))?;
+
+                // Refresh the access token
+                let (new_access_token, new_refresh_token) = self.refresh_access_token(&refresh_token).await?;
+
+                // Update stored tokens
+                mgr.set_token_for_profile(profile_key, &new_access_token)?;
+                if let Some(new_rt) = new_refresh_token {
+                    mgr.set_refresh_token_for_profile(profile_key, &new_rt)?;
+                }
+
+                // Retry the API call with new token
+                api_call(new_access_token).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Async helper that starts the OAuth flow for GitHub:
     /// - opens the user's browser to the GitHub authorize URL
     /// - starts a local HTTP listener on 127.0.0.1:8787 to receive the callback
-    /// - exchanges the code for an access token
-    /// Returns the access token on success.
-    pub async fn start_oauth_flow_async(&self, _account: &str) -> Result<String, String> {
+    /// - exchanges the code for an access token and refresh token
+    /// Returns (access_token, refresh_token) on success.
+    pub async fn start_oauth_flow_async(&self, _account: &str) -> Result<(String, Option<String>), String> {
         // Read client credentials from env
         let client_id = env::var("GITHUB_CLIENT_ID").map_err(|_| "Missing GITHUB_CLIENT_ID environment variable".to_string())?;
         let client_secret = env::var("GITHUB_CLIENT_SECRET").map_err(|_| "Missing GITHUB_CLIENT_SECRET environment variable".to_string())?;
@@ -97,8 +141,12 @@ impl GithubAdapter {
 
         // Exchange the code for an access token
         #[derive(Deserialize)]
+        #[allow(dead_code)]
         struct TokenResponse {
             access_token: String,
+            refresh_token: Option<String>,
+            expires_in: Option<u64>,
+            refresh_token_expires_in: Option<u64>,
             scope: Option<String>,
             token_type: Option<String>,
         }
@@ -127,24 +175,56 @@ impl GithubAdapter {
 
         let tr: TokenResponse = resp.json().await.map_err(|e| format!("Invalid token response: {}", e))?;
 
-        Ok(tr.access_token)
+        Ok((tr.access_token, tr.refresh_token))
     }
-}
 
-#[async_trait]
-impl AuthProviderPort for GithubAdapter {
-    async fn upload_ssh_key(&self, account: &str, public_key: &str) -> Result<u64, String> {
-        // account is treated as the access token here
-        let token = account;
+    /// Fetch profile using a direct token (used during initial OAuth flow before profile exists)
+    pub async fn fetch_profile_with_token(&self, token: &str) -> Result<Profile, String> {
+        #[derive(Deserialize)]
+        struct UserResp {
+            login: Option<String>,
+            name: Option<String>,
+            email: Option<String>,
+        }
 
+        let client = reqwest::Client::new();
+        let resp = client
+            .get("https://api.github.com/user")
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "gitt_account_manager")
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to call /user: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Failed to fetch user (status {}): {}", status, text));
+        }
+
+        let ur: UserResp = resp.json().await.map_err(|e| format!("Invalid user response: {}", e))?;
+
+        let username = ur.login.or(ur.name).unwrap_or_else(|| "unknown".to_string());
+        let email = ur.email.unwrap_or_else(|| "".to_string());
+        print!("Fetched GitHub user: {} <{}>", username, email);
+        Ok(Profile::new(&username, &email))
+    }
+
+    /// Upload SSH key using a direct token (used during initial profile setup)
+    pub async fn upload_ssh_key_with_token(&self, token: &str, public_key: &str) -> Result<u64, String> {
         #[derive(serde::Serialize)]
         struct KeyBody<'a> {
             title: &'a str,
             key: &'a str,
         }
 
+        // Get device identifier to make key title unique per device
+        let device_id = crate::domain::use_cases::ProfilesManager::get_device_identifier();
+        let key_title = format!("git-acc-mngr:{}", device_id);
+
         let body = KeyBody {
-            title: "git-acc-mngr-key",
+            title: &key_title,
             key: public_key,
         };
 
@@ -174,64 +254,161 @@ impl AuthProviderPort for GithubAdapter {
 
         Ok(key_resp.id)
     }
+}
 
-    async fn delete_ssh_key(&self, token: &str, key_id: u64) -> Result<(), String> {
-        let client = reqwest::Client::new();
-        let url = format!("https://api.github.com/user/keys/{}", key_id);
-        let resp = client
-            .delete(&url)
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "gitt_account_manager")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .bearer_auth(token)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to delete SSH key: {}", e))?;
+#[async_trait]
+impl AuthProviderPort for GithubAdapter {
+    async fn upload_ssh_key(&self, profile_key: &str, public_key: &str) -> Result<u64, String> {
+        self.api_call_with_refresh(profile_key, |token| async move {
+            #[derive(serde::Serialize)]
+            struct KeyBody<'a> {
+                title: &'a str,
+                key: &'a str,
+            }
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Failed to delete SSH key (status {}): {}", status, text));
-        }
+            // Get device identifier to make key title unique per device
+            let device_id = crate::domain::use_cases::ProfilesManager::get_device_identifier();
+            let key_title = format!("git-acc-mngr:{}", device_id);
 
-        Ok(())
+            let body = KeyBody {
+                title: &key_title,
+                key: public_key,
+            };
+
+            let client = reqwest::Client::new();
+            let resp = client
+                .post("https://api.github.com/user/keys")
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "gitt_account_manager")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to upload SSH key: {}", e))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(format!("Failed to upload SSH key (status {}): {}", status, text));
+            }
+
+            #[derive(Deserialize)]
+            struct KeyResp {
+                id: u64,
+            }
+            let key_resp: KeyResp = resp.json().await.map_err(|e| format!("Invalid key response: {}", e))?;
+
+            Ok(key_resp.id)
+        }).await
     }
 
-    async fn start_oauth_flow(&self, account: &str) -> Result<String, String> {
+    async fn delete_ssh_key(&self, profile_key: &str, key_id: u64) -> Result<(), String> {
+        self.api_call_with_refresh(profile_key, |token| async move {
+            let client = reqwest::Client::new();
+            let url = format!("https://api.github.com/user/keys/{}", key_id);
+            let resp = client
+                .delete(&url)
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "gitt_account_manager")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to delete SSH key: {}", e))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(format!("Failed to delete SSH key (status {}): {}", status, text));
+            }
+
+            Ok(())
+        }).await
+    }
+
+    async fn start_oauth_flow(&self, account: &str) -> Result<(String, Option<String>), String> {
         // Delegate to the async helper already implemented in this adapter.
         self.start_oauth_flow_async(account).await
     }
 
-    async fn fetch_profile(&self, token: &str) -> Result<Profile, String> {
-        // Call GitHub API: GET /user
+    async fn refresh_access_token(&self, refresh_token: &str) -> Result<(String, Option<String>), String> {
+        let client_id = env::var("GITHUB_CLIENT_ID")
+            .map_err(|_| "Missing GITHUB_CLIENT_ID environment variable".to_string())?;
+        let client_secret = env::var("GITHUB_CLIENT_SECRET")
+            .map_err(|_| "Missing GITHUB_CLIENT_SECRET environment variable".to_string())?;
+
         #[derive(Deserialize)]
-        struct UserResp {
-            login: Option<String>,
-            name: Option<String>,
-            email: Option<String>,
+        #[allow(dead_code)]
+        struct TokenResponse {
+            access_token: String,
+            refresh_token: Option<String>,
+            expires_in: Option<u64>,
+            refresh_token_expires_in: Option<u64>,
         }
 
         let client = reqwest::Client::new();
+        let params = [
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+        ];
+
         let resp = client
-            .get("https://api.github.com/user")
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "gitt_account_manager")
-            .bearer_auth(token)
+            .post("https://github.com/login/oauth/access_token")
+            .header("Accept", "application/json")
+            .form(&params)
             .send()
             .await
-            .map_err(|e| format!("Failed to call /user: {}", e))?;
+            .map_err(|e| format!("Token refresh request failed: {}", e))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Failed to fetch user (status {}): {}", status, text));
+            return Err(format!("Token refresh failed (status {}): {}", status, text));
         }
 
-        let ur: UserResp = resp.json().await.map_err(|e| format!("Invalid user response: {}", e))?;
+        let tr: TokenResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Invalid token refresh response: {}", e))?;
 
-        let username = ur.login.or(ur.name).unwrap_or_else(|| "unknown".to_string());
-        let email = ur.email.unwrap_or_else(|| "".to_string()); //TODO email is not saved correctly 
-        print!("Fetched GitHub user: {} <{}>", username, email);
-        Ok(Profile::new(&username, &email))
+        Ok((tr.access_token, tr.refresh_token))
+    }
+
+    async fn fetch_profile(&self, profile_key: &str) -> Result<Profile, String> {
+        self.api_call_with_refresh(profile_key, |token| async move {
+            // Call GitHub API: GET /user
+            #[derive(Deserialize)]
+            struct UserResp {
+                login: Option<String>,
+                name: Option<String>,
+                email: Option<String>,
+            }
+
+            let client = reqwest::Client::new();
+            let resp = client
+                .get("https://api.github.com/user")
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "gitt_account_manager")
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to call /user: {}", e))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(format!("Failed to fetch user (status {}): {}", status, text));
+            }
+
+            let ur: UserResp = resp.json().await.map_err(|e| format!("Invalid user response: {}", e))?;
+
+            let username = ur.login.or(ur.name).unwrap_or_else(|| "unknown".to_string());
+            let email = ur.email.unwrap_or_else(|| "".to_string()); //TODO email is not saved correctly 
+            print!("Fetched GitHub user: {} <{}>", username, email);
+            Ok(Profile::new(&username, &email))
+        }).await
     }
 }

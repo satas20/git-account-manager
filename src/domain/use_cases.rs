@@ -16,8 +16,10 @@ pub struct ProfileRecord {
     pub ssh_key: Option<String>,
     /// GitHub ID of the uploaded SSH key (used for deletion)
     pub ssh_key_id: Option<u64>,
-    /// encrypted auth token (base64 of nonce+ciphertext)
+    /// encrypted access token (base64 of nonce+ciphertext)
     pub token_encrypted: Option<String>,
+    /// encrypted refresh token (base64 of nonce+ciphertext)
+    pub refresh_token_encrypted: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -42,6 +44,21 @@ impl<'a> ProfilesManager<'a> {
         };
 
         Ok(Self { storage, path })
+    }
+
+    /// Get a device identifier based on the system username and hostname.
+    /// Returns in format "username@hostname" (e.g., "ata@ata-ThinkPad-E15-Ge")
+    pub fn get_device_identifier() -> String {
+        let username = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        
+        let hostname = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "unknown".to_string());
+        
+        format!("{}@{}", username, hostname)
     }
 
     fn default_profiles_path() -> Result<PathBuf, String> {
@@ -146,6 +163,7 @@ impl<'a> ProfilesManager<'a> {
             ssh_key,
             ssh_key_id: None,
             token_encrypted: None,
+            refresh_token_encrypted: None,
         };
         self.upsert_profile(&key, rec)?;
         Ok(key)
@@ -249,6 +267,28 @@ impl<'a> ProfilesManager<'a> {
         let enc = Self::encrypt_token(token)?;
         rec.token_encrypted = Some(enc);
         self.save(&pf)
+    }
+
+    /// Set (encrypt and persist) refresh token for a profile key.
+    pub fn set_refresh_token_for_profile(&self, key: &str, refresh_token: &str) -> Result<(), String> {
+        let mut pf = self.load()?;
+        let rec = pf.profiles.get_mut(key).ok_or_else(|| format!("Profile not found: {}", key))?;
+        let enc = Self::encrypt_token(refresh_token)?;
+        rec.refresh_token_encrypted = Some(enc);
+        self.save(&pf)
+    }
+
+    /// Get the decrypted refresh token for a profile if present.
+    pub fn get_refresh_token(&self, key: &str) -> Result<Option<String>, String> {
+        let pf = self.load()?;
+        let rec = match pf.profiles.get(key) {
+            Some(r) => r,
+            None => return Err(format!("Profile not found: {}", key)),
+        };
+        match &rec.refresh_token_encrypted {
+            Some(enc) => Ok(Some(Self::decrypt_token(enc)?)),
+            None => Ok(None),
+        }
     }
 
     /// Get the decrypted auth token for a profile if present.
@@ -438,8 +478,11 @@ impl<'a> ProfilesManager<'a> {
         // 3. Add key to ssh-agent
         // ssh-add <key_path>
         // Note: ssh-agent must be running.
+        // Redirect stdout/stderr to null to avoid interfering with TUI
         let status_add = Command::new("ssh-add")
             .arg(ssh_key_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
             
         match status_add {
