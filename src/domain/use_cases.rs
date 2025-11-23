@@ -3,7 +3,7 @@ use crate::domain::ports::SystemIOPort;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-
+//TODO:module, which should contain pure business logic, currently has direct dependencies on external systems like the file system (std::fs), environment variables (std::env), and external processes (std::process::Command). This violates the Hexagonal Architecture principle you've laid out
 /// ProfileRecord is the persisted representation stored in the single JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileRecord {

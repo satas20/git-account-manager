@@ -1,7 +1,7 @@
 // Ratatui-driven TUI adapter implementing a small menu and internal state.
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use crate::domain::ports::AuthProviderPort;
-
+//TODO: moudle which only should have UI logic 
 pub struct TuiAdapter;
 
 impl TuiAdapter {
