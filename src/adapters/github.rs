@@ -206,7 +206,38 @@ impl GithubAdapter {
         let ur: UserResp = resp.json().await.map_err(|e| format!("Invalid user response: {}", e))?;
 
         let username = ur.login.or(ur.name).unwrap_or_else(|| "unknown".to_string());
-        let email = ur.email.unwrap_or_else(|| "".to_string());
+        let mut email = ur.email.unwrap_or_default();
+        
+        // If email is empty, fetch from /user/emails and use the primary one
+        if email.is_empty() {
+            #[derive(Deserialize)]
+            struct EmailResp {
+                email: String,
+                primary: bool,
+            }
+
+            let emails_resp = client
+                .get("https://api.github.com/user/emails")
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "gitt_account_manager")
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to call /user/emails: {}", e))?;
+
+            if emails_resp.status().is_success() {
+                let emails: Vec<EmailResp> = emails_resp
+                    .json()
+                    .await
+                    .map_err(|e| format!("Invalid emails response: {}", e))?;
+                
+                // Find primary email
+                if let Some(primary_email) = emails.iter().find(|e| e.primary) {
+                    email = primary_email.email.clone();
+                }
+            }
+        }
+
         print!("Fetched GitHub user: {} <{}>", username, email);
         Ok(Profile::new(&username, &email))
     }

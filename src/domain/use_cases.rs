@@ -46,6 +46,15 @@ impl<'a> ProfilesManager<'a> {
         Ok(Self { storage, path })
     }
 
+    /// Get user's home directory (cross-platform)
+    fn get_home_dir() -> Result<String, String> {
+        if cfg!(windows) {
+            std::env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())
+        } else {
+            std::env::var("HOME").map_err(|_| "HOME not set".to_string())
+        }
+    }
+
     /// Get a device identifier based on the system username and hostname.
     /// Returns in format "username@hostname" (e.g., "ata@ata-ThinkPad-E15-Ge")
     pub fn get_device_identifier() -> String {
@@ -68,7 +77,7 @@ impl<'a> ProfilesManager<'a> {
             p.push("profiles.json");
             return Ok(p);
         }
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+        let home = Self::get_home_dir()?;
         let mut p = PathBuf::from(home);
         p.push(".config");
         p.push("git-account-manager");
@@ -183,7 +192,7 @@ impl<'a> ProfilesManager<'a> {
             p.push("master.key");
             p
         } else {
-            let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+            let home = Self::get_home_dir()?;
             let mut p = PathBuf::from(home);
             p.push(".config");
             p.push("git-account-manager");
@@ -335,7 +344,7 @@ impl<'a> ProfilesManager<'a> {
             p.push("git-account-manager");
             p
         } else {
-            let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+            let home = Self::get_home_dir()?;
             let mut p = PathBuf::from(home);
             p.push(".config");
             p.push("git-account-manager");
@@ -399,7 +408,7 @@ impl<'a> ProfilesManager<'a> {
     /// Switch to the specified profile.
     /// 1. Updates local git config (user.name, user.email).
     /// 2. Updates ~/.ssh/config to use the profile's SSH key for the auth host.
-    /// 3. Adds the SSH key to the ssh-agent.
+    /// 3. Adds the SSH key to the ssh-agent (optional, skipped if agent not available).
     pub fn switch_profile(&self, key: &str) -> Result<(), String> {
         let pf = self.load()?;
         let rec = pf.profiles.get(key).ok_or_else(|| format!("Profile not found: {}", key))?;
@@ -423,8 +432,13 @@ impl<'a> ProfilesManager<'a> {
             return Err("git config user.email failed".to_string());
         }
 
-        // 2. Update ~/.ssh/config
-        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+        // 2. Update SSH config (cross-platform)
+        let home = if cfg!(windows) {
+            std::env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())?
+        } else {
+            std::env::var("HOME").map_err(|_| "HOME not set".to_string())?
+        };
+        
         let mut ssh_config_path = PathBuf::from(&home);
         ssh_config_path.push(".ssh");
         if !ssh_config_path.exists() {
@@ -433,27 +447,24 @@ impl<'a> ProfilesManager<'a> {
         ssh_config_path.push("config");
         let ssh_config_str = ssh_config_path.to_string_lossy().to_string();
 
-        let config_content = if self.storage.file_exists(&ssh_config_str) {
-            self.storage.read_file(&ssh_config_str)?
-        } else {
-            String::new()
+        let config_content = match self.storage.read_file(&ssh_config_str) {
+            Ok(content) => content,
+            Err(_) => String::new(),
         };
 
-        // We need to replace or add the Host block for the auth_host (e.g. github.com)
-        // Simple parsing: look for "Host <auth_host>" and replace the block until next Host or EOF.
-        // Or simpler: use a marker comment managed by this tool?
-        // For MVP, let's parse blocks separated by "Host ".
-        
+        // Convert Windows paths to forward slashes for SSH config
+        let ssh_key_config_path = if cfg!(windows) {
+            ssh_key_path.replace("\\", "/")
+        } else {
+            ssh_key_path.clone()
+        };
+
         let host_entry = format!("Host {}\n  HostName {}\n  PreferredAuthentications publickey\n  IdentityFile {}\n  IdentitiesOnly yes\n", 
-            rec.auth_host, rec.auth_host, ssh_key_path);
+            rec.auth_host, rec.auth_host, ssh_key_config_path);
 
         // Remove existing block for this host if present
-        // This regex approach is a bit fragile but works for standard configs.
-        // We look for `Host github.com` ... (until next Host)
-        // Since we don't have regex crate in domain, we do manual line processing.
-        
         let mut new_lines = Vec::new();
-        let mut skip = false;
+        let mut skip: bool = false;
         for line in config_content.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("Host ") {
@@ -475,20 +486,15 @@ impl<'a> ProfilesManager<'a> {
         let new_config = new_lines.join("\n");
         self.storage.write_file(&ssh_config_str, &new_config)?;
 
-        // 3. Add key to ssh-agent
-        // ssh-add <key_path>
-        // Note: ssh-agent must be running.
+        // 3. Try to add key to ssh-agent (optional, may fail on Windows if agent not running)
         // Redirect stdout/stderr to null to avoid interfering with TUI
-        let status_add = Command::new("ssh-add")
+        let _ = Command::new("ssh-add")
             .arg(ssh_key_path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
-            
-        match status_add {
-            Ok(s) if s.success() => Ok(()),
-            Ok(s) => Err(format!("ssh-add failed with status: {}", s)),
-            Err(e) => Err(format!("Failed to run ssh-add: {}", e)),
-        }
+        // Ignore ssh-add failures - SSH config is sufficient for git operations
+
+        Ok(())
     }
 }

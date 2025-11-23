@@ -211,7 +211,7 @@ impl TuiAdapter {
                                                 match adapter.fetch_profile_with_token(&token).await {
                                                     Ok(profile) => {
                                                         // 3) Persist profile using ProfilesManager + LocalSystemIO
-                                                        let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                                        let storage: crate::adapters::system_io::LocalSystemIO = crate::adapters::system_io::LocalSystemIO::new();
                                                         match crate::domain::use_cases::ProfilesManager::new(&storage, None) {
                                                             Ok(mgr) => {
                                                                 match mgr.create_from_entity(&profile, Some("github".to_string()), None) {
