@@ -1,20 +1,31 @@
-use crate::domain::ports::AuthProviderPort;
 use crate::domain::entity::Profile;
+use crate::domain::ports::AuthProviderPort;
+use crate::domain::use_cases::ProfilesManager;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::env;
 
-pub struct GithubAdapter {
-    // In the future store tokens/config here
+pub struct GithubAdapter<'a> {
+    profiles_manager: Option<ProfilesManager<'a>>,
 }
 
-impl GithubAdapter {
+impl<'a> GithubAdapter<'a> {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            profiles_manager: None,
+        }
+    }
+
+    /// Create adapter with a ProfilesManager for token refresh functionality
+    pub fn with_manager(profiles_manager: ProfilesManager<'a>) -> Self {
+        Self {
+            profiles_manager: Some(profiles_manager),
+        }
     }
 
     /// Helper method to make authenticated GitHub API requests with automatic token refresh.
     /// If the request returns 401, it will attempt to refresh the token and retry once.
+    /// Requires the adapter to be created with `with_manager()`.
     async fn api_call_with_refresh<F, Fut, T>(
         &self,
         profile_key: &str,
@@ -24,13 +35,15 @@ impl GithubAdapter {
         F: Fn(String) -> Fut,
         Fut: std::future::Future<Output = Result<T, String>>,
     {
-        // Load the ProfilesManager to get tokens
-        let storage = crate::adapters::system_io::LocalSystemIO::new();
-        let mgr = crate::domain::use_cases::ProfilesManager::new(&storage, None)
-            .map_err(|e| format!("Failed to create profiles manager: {}", e))?;
+        let mgr = self
+            .profiles_manager
+            .as_ref()
+            .ok_or_else(|| "GithubAdapter not initialized with ProfilesManager".to_string())?;
 
         // Get current access token
-        let token: String = mgr.get_auth_token(profile_key)?
+        let token: String = mgr
+            .get_auth_token(profile_key)
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("No access token found for profile: {}", profile_key))?;
 
         // Try the API call with current token
@@ -38,16 +51,23 @@ impl GithubAdapter {
             Ok(result) => Ok(result),
             Err(e) if e.contains("status 401") || e.contains("Unauthorized") => {
                 // Token expired, try to refresh
-                let refresh_token = mgr.get_refresh_token(profile_key)?
-                    .ok_or_else(|| format!("No refresh token found for profile: {}", profile_key))?;
+                let refresh_token = mgr
+                    .get_refresh_token(profile_key)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| {
+                        format!("No refresh token found for profile: {}", profile_key)
+                    })?;
 
                 // Refresh the access token
-                let (new_access_token, new_refresh_token) = self.refresh_access_token(&refresh_token).await?;
+                let (new_access_token, new_refresh_token) =
+                    self.refresh_access_token(&refresh_token).await?;
 
                 // Update stored tokens
-                mgr.set_token_for_profile(profile_key, &new_access_token)?;
+                mgr.set_token_for_profile(profile_key, &new_access_token)
+                    .map_err(|e| e.to_string())?;
                 if let Some(new_rt) = new_refresh_token {
-                    mgr.set_refresh_token_for_profile(profile_key, &new_rt)?;
+                    mgr.set_refresh_token_for_profile(profile_key, &new_rt)
+                        .map_err(|e| e.to_string())?;
                 }
 
                 // Retry the API call with new token
@@ -243,15 +263,15 @@ impl GithubAdapter {
     }
 
     /// Upload SSH key using a direct token (used during initial profile setup)
-    pub async fn upload_ssh_key_with_token(&self, token: &str, public_key: &str) -> Result<u64, String> {
+    /// device_id should be in format "username@hostname"
+    pub async fn upload_ssh_key_with_token(&self, token: &str, public_key: &str, device_id: &str) -> Result<u64, String> {
         #[derive(serde::Serialize)]
         struct KeyBody<'a> {
             title: &'a str,
             key: &'a str,
         }
 
-        // Get device identifier to make key title unique per device
-        let device_id = crate::domain::use_cases::ProfilesManager::get_device_identifier();
+        // Use device identifier to make key title unique per device
         let key_title = format!("git-acc-mngr:{}", device_id);
 
         let body = KeyBody {
@@ -288,18 +308,25 @@ impl GithubAdapter {
 }
 
 #[async_trait]
-impl AuthProviderPort for GithubAdapter {
+impl<'a> AuthProviderPort for GithubAdapter<'a> {
     async fn upload_ssh_key(&self, profile_key: &str, public_key: &str) -> Result<u64, String> {
-        self.api_call_with_refresh(profile_key, |token| async move {
-            #[derive(serde::Serialize)]
-            struct KeyBody<'a> {
-                title: &'a str,
-                key: &'a str,
-            }
+        // Get device identifier before entering the closure
+        let device_id = if let Some(mgr) = &self.profiles_manager {
+            mgr.get_device_identifier()
+        } else {
+            return Err("GithubAdapter not initialized with ProfilesManager".to_string());
+        };
 
-            // Get device identifier to make key title unique per device
-            let device_id = crate::domain::use_cases::ProfilesManager::get_device_identifier();
-            let key_title = format!("git-acc-mngr:{}", device_id);
+        self.api_call_with_refresh(profile_key, |token| {
+            let device_id = device_id.clone();
+            async move {
+                #[derive(serde::Serialize)]
+                struct KeyBody<'b> {
+                    title: &'b str,
+                    key: &'b str,
+                }
+
+                let key_title = format!("git-acc-mngr:{}", device_id);
 
             let body = KeyBody {
                 title: &key_title,
@@ -328,9 +355,10 @@ impl AuthProviderPort for GithubAdapter {
             struct KeyResp {
                 id: u64,
             }
-            let key_resp: KeyResp = resp.json().await.map_err(|e| format!("Invalid key response: {}", e))?;
+                let key_resp: KeyResp = resp.json().await.map_err(|e| format!("Invalid key response: {}", e))?;
 
-            Ok(key_resp.id)
+                Ok(key_resp.id)
+            }
         }).await
     }
 
