@@ -93,8 +93,13 @@ impl<'a> GithubAdapter<'a> {
         let redirect_path = "/callback";
         let redirect_uri = format!("http://{}:{}{}", redirect_host, redirect_port, redirect_path);
 
-        // state token (static for now; in prod, generate random string)
-        let state = "state123";
+        // Generate cryptographically secure random state token for CSRF protection
+        use rand::Rng;
+        let state: String = rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect();
 
         let scope = "read:user user:email write:public_key";
         let auth_url = format!(
@@ -102,7 +107,7 @@ impl<'a> GithubAdapter<'a> {
             urlencoding::encode(&client_id),
             urlencoding::encode(&redirect_uri),
             urlencoding::encode(scope),
-            urlencoding::encode(state)
+            urlencoding::encode(&state)
         );
 
         // Try to open the browser
@@ -115,6 +120,7 @@ impl<'a> GithubAdapter<'a> {
 
         // Spawn a blocking listener to wait for the single callback request and extract `code`
         let listen_addr = format!("{}:{}", redirect_host, redirect_port);
+        let expected_state = state.clone();
         let code = tokio::task::spawn_blocking(move || -> Result<String, String> {
             use std::io::{BufRead, BufReader, Write};
             use std::net::TcpListener;
@@ -134,16 +140,30 @@ impl<'a> GithubAdapter<'a> {
                 return Err("Malformed HTTP request".to_string());
             }
             let path = parts[1];
-            let code_opt = path.split('?').nth(1).and_then(|q| {
-                q.split('&').find_map(|pair| {
-                    let mut kv = pair.splitn(2, '=');
-                    let k = kv.next()?;
-                    let v = kv.next()?;
-                    if k == "code" { Some(v.to_string()) } else { None }
-                })
-            });
 
-            let code = code_opt.ok_or_else(|| format!("code not found in request path: {}", path))?;
+            // Parse query parameters
+            let query_params: std::collections::HashMap<String, String> = path
+                .split('?')
+                .nth(1)
+                .map(|q| {
+                    q.split('&')
+                        .filter_map(|pair| {
+                            let mut kv = pair.splitn(2, '=');
+                            Some((kv.next()?.to_string(), kv.next()?.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Validate state token (CSRF protection)
+            let received_state = query_params.get("state").ok_or_else(|| "Missing state parameter".to_string())?;
+            if received_state != &expected_state {
+                let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><h2>Authentication failed</h2><p>Invalid state parameter (CSRF check failed)</p></body></html>";
+                stream.write_all(response.as_bytes()).ok();
+                return Err("State parameter mismatch - possible CSRF attack".to_string());
+            }
+
+            let code = query_params.get("code").ok_or_else(|| format!("code not found in request path: {}", path))?.clone();
 
             // respond to browser
             let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><h2>Authentication complete</h2><p>You can close this window and return to the application.</p></body></html>";
