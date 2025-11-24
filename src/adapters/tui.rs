@@ -18,7 +18,7 @@ impl TuiAdapter {
         #[derive(PartialEq, Eq)]
         enum ScreenState {
             MainMenu,
-            AddMenu,
+            Help,
             Profiles,
         }
 
@@ -64,35 +64,62 @@ impl TuiAdapter {
                 match state {
                     ScreenState::MainMenu => {
                         let items = vec![
-                            ListItem::new("1 - Add new"),
-                            ListItem::new("2 - Profiles"),
+                            ListItem::new("1 - Profiles"),
+                            ListItem::new("2 - Help/About"),
                             ListItem::new("q - Quit"),
                         ];
                         let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Menu"));
                         f.render_widget(list, chunks[1]);
                     }
-                    ScreenState::AddMenu => {
-                        let items = vec![
-                            ListItem::new("1 - GitHub"),
-                            ListItem::new("b - Back"),
+                    ScreenState::Help => {
+                        let help_text = vec![
+                            "Git Account Manager (git-acc-mngr)",
+                            "",
+                            "WHAT IT DOES:",
+                            "Manages multiple Git identities with OAuth authentication",
+                            "and SSH key management.",
+                            "",
+                            "BACKGROUND OPERATIONS:",
+                            "• OAuth: Authenticates with GitHub",
+                            "• Git Config: Updates user.name and user.email",
+                            "• SSH Keys: Generates Ed25519 keys per profile",
+                            "• SSH Config: Updates ~/.ssh/config",
+                            "• Tokens: Encrypts and stores OAuth tokens",
+                            "",
+                            "FILES & LOCATIONS:",
+                            "• Config: ~/.config/git-account-manager/",
+                            "• Profiles: profiles.json",
+                            "• SSH Keys: keys/<profile>/id_ed25519",
+                            "• Encryption: master.key",
+                            "",
+                            "SETUP REQUIREMENTS:",
+                            "Set environment variables:",
+                            "  GITHUB_CLIENT_ID=<your_client_id>",
+                            "  GITHUB_CLIENT_SECRET=<your_client_secret>",
+                            "",
+                            "Press 'b' to go back",
                         ];
-                        let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Add New"));
+                        let items: Vec<ListItem> = help_text.iter().map(|s| ListItem::new(*s)).collect();
+                        let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Help / About"));
                         f.render_widget(list, chunks[1]);
                     }
                     ScreenState::Profiles => {
                         match profiles_action {
                             ProfilesAction::None => {
-                                let items = if profiles_list.is_empty() {
-                                    vec![ListItem::new("(no profiles yet)")]
+                                let mut items = vec![ListItem::new("0 - Add new")];
+                                if profiles_list.is_empty() {
+                                    items.push(ListItem::new(""));
+                                    items.push(ListItem::new("(no profiles yet)"));
                                 } else {
-                                    profiles_list.iter().enumerate().map(|(i, (_, name, email, is_current))| {
+                                    items.push(ListItem::new(""));
+                                    for (i, (_, name, email, is_current)) in profiles_list.iter().enumerate() {
                                         let mut disp = format!("{}: {} <{}>", i + 1, name, email);
                                         if *is_current {
                                             disp.push_str(" - current");
                                         }
-                                        ListItem::new(disp)
-                                    }).collect()
-                                };
+                                        items.push(ListItem::new(disp));
+                                    }
+                                }
                                 let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Profiles"));
                                 f.render_widget(list, chunks[1]);
                             }
@@ -107,7 +134,8 @@ impl TuiAdapter {
                                 items.push(ListItem::new(""));
                                 items.push(ListItem::new("1 - Switch profile"));
                                 items.push(ListItem::new("2 - Remove profile"));
-                                items.push(ListItem::new("3 - Back"));
+                                items.push(ListItem::new("3 - Update profile"));
+                                items.push(ListItem::new("4 - Back"));
                                 let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Profile Actions"));
                                 f.render_widget(list, chunks[1]);
                             }
@@ -121,10 +149,10 @@ impl TuiAdapter {
                 } else {
                     match state {
                         ScreenState::MainMenu => "Select an option: 1, 2 or q".to_string(),
-                        ScreenState::AddMenu => "Choose a provider or 'b' to go back".to_string(),
+                        ScreenState::Help => "Press 'b' to go back".to_string(),
                         ScreenState::Profiles => match profiles_action {
-                            ProfilesAction::None => "Choose a profile or 'b' to go back".to_string(),
-                            ProfilesAction::ProfileMenu(_) => "Choose an action or 'b' to go back".to_string(),
+                            ProfilesAction::None => "Press '0' to add new or select a profile, 'b' to go back".to_string(),
+                            ProfilesAction::ProfileMenu(_) => "Choose an action: 1-4 or 'b' to go back".to_string(),
                         },
                     }
                 };
@@ -145,10 +173,6 @@ impl TuiAdapter {
                         match state {
                             ScreenState::MainMenu => match key_event.code {
                                 KeyCode::Char('1') => {
-                                    state = ScreenState::AddMenu;
-                                    message = None;
-                                }
-                                KeyCode::Char('2') => {
                                     // Load profiles using the use case function
                                     state = ScreenState::Profiles;
                                     message = None;
@@ -163,31 +187,14 @@ impl TuiAdapter {
                                         }
                                     }
                                 }
+                                KeyCode::Char('2') => {
+                                    state = ScreenState::Help;
+                                    message = None;
+                                }
                                 KeyCode::Char('q') => break,
                                 _ => {}
                             },
-                            ScreenState::AddMenu => match key_event.code {
-                                KeyCode::Char('1') => {
-                                    // Start GitHub OAuth flow in background
-                                    message = Some("Starting GitHub OAuth... (browser should open)".to_string());
-
-                                    let (tx, rx) = std::sync::mpsc::channel();
-                                    task_rx = Some(rx);
-
-                                    tokio::spawn(async move {
-                                        let storage = crate::adapters::system_io::LocalSystemIO::new();
-                                        let github_adapter = crate::adapters::github::GithubAdapter::new();
-
-                                        match crate::domain::use_cases::add_github_profile_use_case(&storage, &github_adapter).await {
-                                            Ok(key) => {
-                                                let _ = tx.send(Ok(key));
-                                            }
-                                            Err(e) => {
-                                                let _ = tx.send(Err(e.to_string()));
-                                            }
-                                        }
-                                    });
-                                }
+                            ScreenState::Help => match key_event.code {
                                 KeyCode::Char('b') | KeyCode::Esc => {
                                     state = ScreenState::MainMenu;
                                     message = None;
@@ -201,6 +208,32 @@ impl TuiAdapter {
                                             state = ScreenState::MainMenu;
                                             message = None;
                                             profiles_action = ProfilesAction::None;
+                                            // Reload profiles when returning to main menu so it's fresh when reopening
+                                            let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                            if let Ok(list) = crate::domain::use_cases::list_profiles_use_case(&storage) {
+                                                profiles_list = list;
+                                            }
+                                        }
+                                        KeyCode::Char('0') => {
+                                            // Start GitHub OAuth flow in background (Add new profile)
+                                            message = Some("Starting GitHub OAuth... (browser should open)".to_string());
+
+                                            let (tx, rx) = std::sync::mpsc::channel();
+                                            task_rx = Some(rx);
+
+                                            tokio::spawn(async move {
+                                                let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                                let github_adapter = crate::adapters::github::GithubAdapter::new();
+
+                                                match crate::domain::use_cases::add_github_profile_use_case(&storage, &github_adapter).await {
+                                                    Ok(key) => {
+                                                        let _ = tx.send(Ok(key));
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = tx.send(Err(e.to_string()));
+                                                    }
+                                                }
+                                            });
                                         }
                                         KeyCode::Char(c) if c.is_ascii_digit() => {
                                             let idx = c.to_digit(10).unwrap_or(0) as usize;
@@ -215,7 +248,7 @@ impl TuiAdapter {
                                         _ => {}
                                     },
                                     ProfilesAction::ProfileMenu(sel) => match key_event.code {
-                                        KeyCode::Char('b') | KeyCode::Char('3') | KeyCode::Esc => {
+                                        KeyCode::Char('b') | KeyCode::Char('4') | KeyCode::Esc => {
                                             profiles_action = ProfilesAction::None;
                                             message = None;
                                         }
@@ -229,6 +262,10 @@ impl TuiAdapter {
                                                 match crate::domain::use_cases::switch_profile_use_case(&storage, &key_clone) {
                                                     Ok(_) => {
                                                         message = Some(format!("Switched to profile: {}", key_clone));
+                                                        // Reload profiles list to update current status
+                                                        if let Ok(list) = crate::domain::use_cases::list_profiles_use_case(&storage) {
+                                                            profiles_list = list;
+                                                        }
                                                     }
                                                     Err(e) => {
                                                         message = Some(format!("Failed to switch profile: {}", e));
@@ -266,6 +303,33 @@ impl TuiAdapter {
                                             }
                                             profiles_action = ProfilesAction::None;
                                         }
+                                        KeyCode::Char('3') => {
+                                            // Update profile - re-fetch from GitHub (async)
+                                            if sel < profiles_list.len() {
+                                                let (key, _, _, _) = &profiles_list[sel];
+                                                let key_clone = key.clone();
+                                                message = Some(format!("Updating profile {}...", key_clone));
+
+                                                let (tx, rx) = std::sync::mpsc::channel();
+                                                task_rx = Some(rx);
+
+                                                tokio::spawn(async move {
+                                                    let storage = crate::adapters::system_io::LocalSystemIO::new();
+
+                                                    match crate::domain::use_cases::update_profile_use_case(&storage, &key_clone).await {
+                                                        Ok(_) => {
+                                                            let _ = tx.send(Ok(format!("Updated profile: {}", key_clone)));
+                                                        }
+                                                        Err(e) => {
+                                                            let _ = tx.send(Err(format!("Failed to update profile: {}", e)));
+                                                        }
+                                                    }
+                                                });
+                                            } else {
+                                                message = Some("Invalid selection".to_string());
+                                            }
+                                            profiles_action = ProfilesAction::None;
+                                        }
                                         _ => {}
                                     },
                                 }
@@ -281,13 +345,7 @@ impl TuiAdapter {
                 match rx.try_recv() {
                     Ok(Ok(msg)) => {
                         // Task succeeded
-                        if state == ScreenState::AddMenu {
-                            state = ScreenState::Profiles;
-                            profiles_action = ProfilesAction::None;
-                            message = Some(format!("Profile saved: {}", msg));
-                        } else {
-                            message = Some(msg);
-                        }
+                        message = Some(msg);
                         task_rx = None;
 
                         // Reload profiles list

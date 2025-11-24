@@ -352,6 +352,22 @@ impl<'a> ProfilesManager<'a> {
         }
     }
 
+    /// Update profile metadata (name, email) while preserving keys and tokens.
+    /// This is useful for refreshing profile information from the remote provider.
+    pub fn update_profile_metadata(&self, key: &str, name: String, email: String) -> Result<()> {
+        let mut pf = self.load()?;
+        let rec = pf
+            .profiles
+            .get_mut(key)
+            .ok_or_else(|| DomainError::ProfileNotFound(key.to_string()))?;
+
+        // Update only name and email, preserve everything else
+        rec.name = name;
+        rec.email = email;
+
+        self.save(&pf)
+    }
+
     /// Generate an Ed25519 SSH keypair for the given profile key.
     /// The keys are stored in `$XDG_CONFIG_HOME/git-account-manager/keys/<sanitized_key>/`.
     /// Updates the profile record with the path to the private key.
@@ -451,7 +467,7 @@ impl<'a> ProfilesManager<'a> {
         // 1. Update git config
         let output_name = self
             .storage
-            .execute_command("git", &["config", "--global", "user.name", &rec.name])?;
+            .execute_command("git", &["config", "user.name", &rec.name])?;
 
         if output_name.exit_code != 0 {
             return Err(DomainError::GitError(format!(
@@ -462,9 +478,19 @@ impl<'a> ProfilesManager<'a> {
 
         let output_email = self
             .storage
+            .execute_command("git", &["config", "user.email", &rec.email])?;
+
+        let output_global_name = self
+            .storage
+            .execute_command("git", &["config", "--global", "user.name", &rec.name])?;
+
+        let output_global_email = self
+            .storage
             .execute_command("git", &["config", "--global", "user.email", &rec.email])?;
 
-        if output_email.exit_code != 0 {
+
+ 
+        if output_email.exit_code != 0 || output_global_name.exit_code != 0 || output_global_email.exit_code != 0 {
             return Err(DomainError::GitError(format!(
                 "Failed to set user.email: {}",
                 output_email.stderr
@@ -608,8 +634,8 @@ pub fn list_profiles_use_case(
     let mgr = ProfilesManager::new(storage, None)?;
     let keys = mgr.list_keys()?;
 
-    let git_name = mgr.get_git_config("user.name");
-    let git_email = mgr.get_git_config("user.email");
+    let git_name = mgr.get_git_config("user.name").map(|s| s.trim().to_string());
+    let git_email = mgr.get_git_config("user.email").map(|s| s.trim().to_string());
 
     let mut result = Vec::new();
     for key in keys {
@@ -648,4 +674,42 @@ pub async fn remove_profile_use_case(
 
     // Use the high-level method
     mgr2.remove_profile_with_remote_cleanup(key, &github_adapter).await
+}
+
+/// Update profile by re-fetching user info from GitHub.
+/// Refreshes name and email from GitHub API while keeping existing SSH keys and tokens.
+pub async fn update_profile_use_case(
+    storage: &dyn crate::domain::ports::SystemIOPort,
+    key: &str,
+) -> Result<()> {
+    let mgr = ProfilesManager::new(storage, None)?;
+
+    // Get encrypted access token
+    let token = mgr
+        .get_auth_token(key)?
+        .ok_or_else(|| DomainError::ProfileNotFound(format!("No token found for profile: {}", key)))?;
+
+    // Create GitHub adapter and fetch latest profile info
+    let github_adapter = crate::adapters::github::GithubAdapter::new();
+    let profile = github_adapter.fetch_profile_with_token(&token).await
+        .map_err(|e| DomainError::GitError(format!("Failed to fetch profile from GitHub: {}", e)))?;
+
+    // Update profile metadata while preserving SSH keys and tokens
+    mgr.update_profile_metadata(key, profile.name, profile.email)?;
+
+    // If this is the current profile, update git config
+    let git_name = mgr.get_git_config("user.name").map(|s| s.trim().to_string());
+    let git_email = mgr.get_git_config("user.email").map(|s| s.trim().to_string());
+
+    if let Ok(Some(rec)) = mgr.get_profile(key) {
+        let is_current = git_name.as_deref().map(|s| s == rec.name).unwrap_or(false) &&
+                        git_email.as_deref().map(|s| s == rec.email).unwrap_or(false);
+
+        if is_current {
+            // Update git config with new name/email
+            mgr.switch_profile(key)?;
+        }
+    }
+
+    Ok(())
 }

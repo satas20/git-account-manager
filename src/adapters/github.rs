@@ -158,7 +158,7 @@ impl<'a> GithubAdapter<'a> {
             // Validate state token (CSRF protection)
             let received_state = query_params.get("state").ok_or_else(|| "Missing state parameter".to_string())?;
             if received_state != &expected_state {
-                let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><h2>Authentication failed</h2><p>Invalid state parameter (CSRF check failed)</p></body></html>";
+                let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><head><script>window.setTimeout(function(){window.close();},3000);</script></head><body><h2>Authentication failed</h2><p>Invalid state parameter (CSRF check failed). This window will close automatically...</p></body></html>";
                 stream.write_all(response.as_bytes()).ok();
                 return Err("State parameter mismatch - possible CSRF attack".to_string());
             }
