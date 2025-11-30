@@ -1,6 +1,8 @@
 // Ratatui-driven TUI adapter - PURE UI LAYER
 // All business logic is delegated to use case functions in the domain layer.
 use crossterm::event::{Event, KeyCode, KeyModifiers};
+use ratatui::style::{Color, Style, Modifier};
+use ratatui::text::Span;
 
 pub struct TuiAdapter;
 
@@ -46,11 +48,21 @@ impl TuiAdapter {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        // Define color scheme
+        let bg_color = Color::Rgb(54, 54, 54);        // #363636 - main background
+        let highlight_color = Color::Rgb(235, 81, 53); // #eb5135 - highlight/selected
+        let text_color = Color::Rgb(240, 240, 240);    // #F0F0F0 - default text
+        let separator_color = Color::Rgb(136, 136, 136); // #888888 - separators
+
         // main event/draw loop
         loop {
             terminal.draw(|f| {
                 let size = f.size();
-                let block = Block::default().title("Git Account Manager").borders(Borders::ALL);
+                let block = Block::default()
+                    .title("Git Account Manager")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(separator_color))
+                    .style(Style::default().bg(bg_color).fg(text_color));
                 f.render_widget(block, size);
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
@@ -58,74 +70,97 @@ impl TuiAdapter {
                     .split(size);
 
                 // Header
-                let header = Paragraph::new("Git Account Manager").block(Block::default().borders(Borders::NONE));
+                let header = Paragraph::new("Git Account Manager")
+                    .style(Style::default().fg(highlight_color).add_modifier(Modifier::BOLD))
+                    .block(Block::default().borders(Borders::NONE).style(Style::default().bg(bg_color)));
                 f.render_widget(header, chunks[0]);
 
                 // Body: menu or submenu
                 match state {
                     ScreenState::MainMenu => {
                         let items = vec![
-                            ListItem::new("1 - Profiles"),
-                            ListItem::new("2 - Help/About"),
-                            ListItem::new("q - Quit"),
+                            ListItem::new("1 - Profiles").style(Style::default().fg(text_color)),
+                            ListItem::new("2 - Help/About").style(Style::default().fg(text_color)),
+                            ListItem::new("q - Quit").style(Style::default().fg(text_color)),
                         ];
-                        let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Menu"));
+                        let list = List::new(items)
+                            .block(Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(separator_color))
+                                .title(Span::styled("Menu", Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)))
+                                .style(Style::default().bg(bg_color)));
                         f.render_widget(list, chunks[1]);
                     }
                     ScreenState::ProviderSelection => {
                         let items = vec![
-                            ListItem::new("Select a provider:"),
+                            ListItem::new("Select a provider:").style(Style::default().fg(text_color).add_modifier(Modifier::BOLD)),
                             ListItem::new(""),
-                            ListItem::new("1 - GitHub"),
-                            ListItem::new("2 - GitLab"),
+                            ListItem::new("1 - GitHub").style(Style::default().fg(text_color)),
+                            ListItem::new("2 - GitLab").style(Style::default().fg(text_color)),
                             ListItem::new(""),
-                            ListItem::new("b - Back"),
+                            ListItem::new("b - Back").style(Style::default().fg(text_color)),
                         ];
-                        let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Add New Profile - Provider Selection"));
+                        let list = List::new(items)
+                            .block(Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(separator_color))
+                                .title(Span::styled("Add New Profile - Provider Selection", Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)))
+                                .style(Style::default().bg(bg_color)));
                         f.render_widget(list, chunks[1]);
                     }
                     ScreenState::Help => {
                         let help_text = vec![
-                            "Git Account Manager (git-acc-mngr)",
-                            "",
-                            "WHAT IT DOES:",
-                            "Manages multiple Git identities with OAuth authentication",
-                            "and SSH key management.",
-                            "",
-                            "BACKGROUND OPERATIONS:",
-                            "• OAuth: Authenticates with GitHub & GitLab",
-                            "• Git Config: Updates user.name and user.email",
-                            "• SSH Keys: Generates Ed25519 keys per profile",
-                            "• SSH Config: Updates ~/.ssh/config",
-                            "• Tokens: Encrypts and stores OAuth tokens",
-                            "",
-                            "FILES & LOCATIONS:",
-                            "• Config: ~/.config/git-account-manager/",
-                            "• Profiles: profiles.json",
-                            "• SSH Keys: keys/<profile>/id_ed25519",
-                            "• Encryption: master.key",
-                            "",
-                            "SETUP REQUIREMENTS:",
-                            "GitHub:",
-                            "  GITHUB_CLIENT_ID=<your_client_id>",
-                            "  GITHUB_CLIENT_SECRET=<your_client_secret>",
-                            "GitLab:",
-                            "  GITLAB_APP_ID=<your_app_id>",
-                            "  GITLAB_CLIENT_SECRET=<your_client_secret>",
-                            "",
-                            "Press 'b' to go back",
+                            ("Git Account Manager (git-acc-mngr)", true),
+                            ("", false),
+                            ("WHAT IT DOES:", true),
+                            ("Manages multiple Git identities with OAuth authentication", false),
+                            ("and SSH key management.", false),
+                            ("", false),
+                            ("BACKGROUND OPERATIONS:", true),
+                            ("• OAuth: Authenticates with GitHub & GitLab", false),
+                            ("• Git Config: Updates user.name and user.email", false),
+                            ("• SSH Keys: Generates Ed25519 keys per profile", false),
+                            ("• SSH Config: Updates ~/.ssh/config", false),
+                            ("• Tokens: Encrypts and stores OAuth tokens", false),
+                            ("", false),
+                            ("FILES & LOCATIONS:", true),
+                            ("• Config: ~/.config/git-account-manager/", false),
+                            ("• Profiles: profiles.json", false),
+                            ("• SSH Keys: keys/<profile>/id_ed25519", false),
+                            ("• Encryption: master.key", false),
+                            ("", false),
+                            ("SETUP REQUIREMENTS:", true),
+                            ("GitHub:", false),
+                            ("  GITHUB_CLIENT_ID=<your_client_id>", false),
+                            ("  GITHUB_CLIENT_SECRET=<your_client_secret>", false),
+                            ("GitLab:", false),
+                            ("  GITLAB_APP_ID=<your_app_id>", false),
+                            ("  GITLAB_CLIENT_SECRET=<your_client_secret>", false),
+                            ("", false),
+                            ("Press 'b' to go back", false),
                         ];
-                        let items: Vec<ListItem> = help_text.iter().map(|s| ListItem::new(*s)).collect();
-                        let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Help / About"));
+                        let items: Vec<ListItem> = help_text.iter().map(|(s, is_header)| {
+                            if *is_header {
+                                ListItem::new(*s).style(Style::default().fg(highlight_color).add_modifier(Modifier::BOLD))
+                            } else {
+                                ListItem::new(*s).style(Style::default().fg(text_color))
+                            }
+                        }).collect();
+                        let list = List::new(items)
+                            .block(Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(separator_color))
+                                .title(Span::styled("Help / About", Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)))
+                                .style(Style::default().bg(bg_color)));
                         f.render_widget(list, chunks[1]);
                     }
                     ScreenState::Profiles => {
                         match profiles_action {
                             ProfilesAction::None => {
-                                let mut items = vec![ListItem::new("0 - Add new")];
+                                let mut items = vec![ListItem::new("0 - Add new").style(Style::default().fg(text_color))];
                                 if profiles_list.is_empty() {
                                     items.push(ListItem::new(""));
-                                    items.push(ListItem::new("(no profiles yet)"));
+                                    items.push(ListItem::new("(no profiles yet)").style(Style::default().fg(separator_color)));
                                 } else {
                                     items.push(ListItem::new(""));
                                     for (i, (key, name, email, is_current)) in profiles_list.iter().enumerate() {
@@ -134,30 +169,44 @@ impl TuiAdapter {
                                         let mut disp = format!("{}: {} <{}> [{}]", i + 1, name, email, adapter);
                                         if *is_current {
                                             disp.push_str(" - current");
+                                            items.push(ListItem::new(disp).style(Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)));
+                                        } else {
+                                            items.push(ListItem::new(disp).style(Style::default().fg(text_color)));
                                         }
-                                        items.push(ListItem::new(disp));
                                     }
                                 }
                                 items.push(ListItem::new(""));
-                                items.push(ListItem::new("b - Back"));
-                                let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Profiles"));
+                                items.push(ListItem::new("b - Back").style(Style::default().fg(text_color)));
+                                let list = List::new(items)
+                                    .block(Block::default()
+                                        .borders(Borders::ALL)
+                                        .border_style(Style::default().fg(separator_color))
+                                        .title(Span::styled("Profiles", Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)))
+                                        .style(Style::default().bg(bg_color)));
                                 f.render_widget(list, chunks[1]);
                             }
                             ProfilesAction::ProfileMenu(sel) => {
                                 let mut items = vec![];
                                 if sel < profiles_list.len() {
                                     let (key, _, _, _) = &profiles_list[sel];
-                                    items.push(ListItem::new(format!("Selected: {}", key)));
+                                    items.push(ListItem::new(format!("Selected: {}", key))
+                                        .style(Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)));
                                 } else {
-                                    items.push(ListItem::new("Selected: (invalid)"));
+                                    items.push(ListItem::new("Selected: (invalid)")
+                                        .style(Style::default().fg(separator_color)));
                                 }
                                 items.push(ListItem::new(""));
-                                items.push(ListItem::new("1 - Switch profile"));
-                                items.push(ListItem::new("2 - Remove profile"));
-                                items.push(ListItem::new("3 - Sync account"));
+                                items.push(ListItem::new("1 - Switch profile").style(Style::default().fg(text_color)));
+                                items.push(ListItem::new("2 - Remove profile").style(Style::default().fg(text_color)));
+                                items.push(ListItem::new("3 - Sync account").style(Style::default().fg(text_color)));
                                 items.push(ListItem::new(""));
-                                items.push(ListItem::new("b - Back"));
-                                let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Profile Actions"));
+                                items.push(ListItem::new("b - Back").style(Style::default().fg(text_color)));
+                                let list = List::new(items)
+                                    .block(Block::default()
+                                        .borders(Borders::ALL)
+                                        .border_style(Style::default().fg(separator_color))
+                                        .title(Span::styled("Profile Actions", Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)))
+                                        .style(Style::default().bg(bg_color)));
                                 f.render_widget(list, chunks[1]);
                             }
                         }
@@ -165,10 +214,12 @@ impl TuiAdapter {
                 }
 
                 // Footer / message area
-                let footer_text = if let Some(msg) = &message {
-                    msg.clone()
+                let (footer_text, is_success) = if let Some(msg) = &message {
+                    // Check if message indicates success or failure
+                    let is_success = msg.contains("Added") || msg.contains("Switched") || msg.contains("Removed") || msg.contains("Synced");
+                    (msg.clone(), is_success)
                 } else {
-                    match state {
+                    let default_msg = match state {
                         ScreenState::MainMenu => "Select an option: 1, 2, or q".to_string(),
                         ScreenState::Help => "Press 'b' to go back".to_string(),
                         ScreenState::ProviderSelection => "Select a provider: 1 (GitHub), 2 (GitLab), or 'b' to go back".to_string(),
@@ -176,10 +227,23 @@ impl TuiAdapter {
                             ProfilesAction::None => "Press '0' to add new or select a profile, 'b' to go back".to_string(),
                             ProfilesAction::ProfileMenu(_) => "Choose an action: 1-3 or 'b' to go back".to_string(),
                         },
-                    }
+                    };
+                    (default_msg, false)
                 };
 
-                let footer = Paragraph::new(footer_text).block(Block::default().borders(Borders::ALL).title("Status"));
+                let footer_style = if is_success {
+                    Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(text_color)
+                };
+
+                let footer = Paragraph::new(footer_text)
+                    .style(footer_style)
+                    .block(Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(separator_color))
+                        .title(Span::styled("Status", Style::default().fg(highlight_color).add_modifier(Modifier::BOLD)))
+                        .style(Style::default().bg(bg_color)));
                 f.render_widget(footer, chunks[2]);
             })?;
 
