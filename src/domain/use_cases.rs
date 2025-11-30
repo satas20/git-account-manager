@@ -1,6 +1,6 @@
 use crate::domain::entity::Profile;
 use crate::domain::error::{DomainError, Result};
-use crate::domain::ports::SystemIOPort;
+use crate::domain::ports::{AuthProviderPort, SystemIOPort};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -627,6 +627,47 @@ pub async fn add_github_profile_use_case(
     Ok(key)
 }
 
+/// Add a new GitLab profile: runs OAuth, fetches user info, generates SSH keys, and uploads them.
+pub async fn add_gitlab_profile_use_case(
+    storage: &dyn crate::domain::ports::SystemIOPort,
+    gitlab_adapter: &crate::adapters::gitlab::GitlabAdapter<'_>,
+) -> Result<String> {
+    // 1) Run OAuth and get token
+    let (token, refresh_token) = gitlab_adapter.start_oauth_flow_async("default").await
+        .map_err(|e| DomainError::GitError(format!("OAuth failed: {}", e)))?;
+
+    // 2) Fetch user profile from GitLab
+    let profile = gitlab_adapter.fetch_profile_with_token(&token).await
+        .map_err(|e| DomainError::GitError(format!("Failed to fetch profile: {}", e)))?;
+
+    // 3) Create ProfilesManager and persist profile
+    let mgr = ProfilesManager::new(storage, None)?;
+    let key = mgr.create_from_entity(&profile, Some("gitlab".to_string()), None)?;
+
+    // 4) Store tokens encrypted (GitLab always provides refresh token)
+    mgr.set_token_for_profile(&key, &token)?;
+    if let Some(rt) = refresh_token {
+        mgr.set_refresh_token_for_profile(&key, &rt)?;
+    }
+
+    // 5) Generate SSH keypair
+    mgr.generate_and_assign_ssh_key(&key)?;
+
+    // 6) Upload public key to GitLab
+    let device_id = mgr.get_device_identifier();
+    let pub_key = mgr.get_public_key_content(&key)?;
+    let key_id = gitlab_adapter.upload_ssh_key_with_token(&token, &pub_key, &device_id).await
+        .map_err(|e| DomainError::SshError(format!("Failed to upload SSH key: {}", e)))?;
+
+    // 7) Update profile with key_id
+    if let Ok(Some(mut rec)) = mgr.get_profile(&key) {
+        rec.ssh_key_id = Some(key_id);
+        mgr.upsert_profile(&key, rec)?;
+    }
+
+    Ok(key)
+}
+
 /// List all profiles with their display information (name, email, current status).
 pub fn list_profiles_use_case(
     storage: &dyn crate::domain::ports::SystemIOPort,
@@ -666,18 +707,35 @@ pub async fn remove_profile_use_case(
 ) -> Result<()> {
     let mgr = ProfilesManager::new(storage, None)?;
 
-    // Create GithubAdapter with the manager for token refresh
-    let github_adapter = crate::adapters::github::GithubAdapter::with_manager(mgr);
+    // Determine which adapter to use based on the profile key (format: "username@adapter")
+    let adapter = key.split('@').nth(1).unwrap_or("github");
 
-    // Get a new manager reference (since we moved mgr into github_adapter)
-    let mgr2 = ProfilesManager::new(storage, None)?;
+    match adapter {
+        "gitlab" => {
+            // Create GitlabAdapter with the manager for token refresh
+            let gitlab_adapter = crate::adapters::gitlab::GitlabAdapter::with_manager(mgr);
 
-    // Use the high-level method
-    mgr2.remove_profile_with_remote_cleanup(key, &github_adapter).await
+            // Get a new manager reference (since we moved mgr into gitlab_adapter)
+            let mgr2 = ProfilesManager::new(storage, None)?;
+
+            // Use the high-level method
+            mgr2.remove_profile_with_remote_cleanup(key, &gitlab_adapter).await
+        }
+        _ => {
+            // Default to GitHub adapter
+            let github_adapter = crate::adapters::github::GithubAdapter::with_manager(mgr);
+
+            // Get a new manager reference (since we moved mgr into github_adapter)
+            let mgr2 = ProfilesManager::new(storage, None)?;
+
+            // Use the high-level method
+            mgr2.remove_profile_with_remote_cleanup(key, &github_adapter).await
+        }
+    }
 }
 
-/// Update profile by re-fetching user info from GitHub.
-/// Refreshes name and email from GitHub API while keeping existing SSH keys and tokens.
+/// Update profile by re-fetching user info from the provider (GitHub or GitLab).
+/// Refreshes name and email from the provider API while keeping existing SSH keys and tokens.
 pub async fn update_profile_use_case(
     storage: &dyn crate::domain::ports::SystemIOPort,
     key: &str,
@@ -689,10 +747,23 @@ pub async fn update_profile_use_case(
         .get_auth_token(key)?
         .ok_or_else(|| DomainError::ProfileNotFound(format!("No token found for profile: {}", key)))?;
 
-    // Create GitHub adapter and fetch latest profile info
-    let github_adapter = crate::adapters::github::GithubAdapter::new();
-    let profile = github_adapter.fetch_profile_with_token(&token).await
-        .map_err(|e| DomainError::GitError(format!("Failed to fetch profile from GitHub: {}", e)))?;
+    // Determine which adapter to use based on the profile key (format: "username@adapter")
+    let adapter = key.split('@').nth(1).unwrap_or("github");
+
+    let profile = match adapter {
+        "gitlab" => {
+            // Create GitLab adapter and fetch latest profile info
+            let gitlab_adapter = crate::adapters::gitlab::GitlabAdapter::new();
+            gitlab_adapter.fetch_profile_with_token(&token).await
+                .map_err(|e| DomainError::GitError(format!("Failed to fetch profile from GitLab: {}", e)))?
+        }
+        _ => {
+            // Default to GitHub adapter
+            let github_adapter = crate::adapters::github::GithubAdapter::new();
+            github_adapter.fetch_profile_with_token(&token).await
+                .map_err(|e| DomainError::GitError(format!("Failed to fetch profile from GitHub: {}", e)))?
+        }
+    };
 
     // Update profile metadata while preserving SSH keys and tokens
     mgr.update_profile_metadata(key, profile.name, profile.email)?;
@@ -707,6 +778,101 @@ pub async fn update_profile_use_case(
 
         if is_current {
             // Update git config with new name/email
+            mgr.switch_profile(key)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Sync account: re-fetches user info, deletes old SSH key from provider, generates new SSH key, and uploads it.
+/// This is a more comprehensive sync that rotates the SSH key for security.
+pub async fn sync_account_use_case(
+    storage: &dyn crate::domain::ports::SystemIOPort,
+    key: &str,
+) -> Result<()> {
+    // Determine which adapter to use based on the profile key (format: "username@adapter")
+    let adapter_name = key.split('@').nth(1).unwrap_or("github");
+
+    // 1. Delete old SSH key from remote provider (if exists)
+    let mgr = ProfilesManager::new(storage, None)?;
+    let old_key_id = if let Ok(Some(rec)) = mgr.get_profile(key) {
+        rec.ssh_key_id
+    } else {
+        None
+    };
+
+    if let Some(key_id) = old_key_id {
+        match adapter_name {
+            "gitlab" => {
+                let gitlab_adapter = crate::adapters::gitlab::GitlabAdapter::with_manager(mgr);
+                let _ = gitlab_adapter.delete_ssh_key(key, key_id).await;
+            }
+            _ => {
+                let github_adapter = crate::adapters::github::GithubAdapter::with_manager(mgr);
+                let _ = github_adapter.delete_ssh_key(key, key_id).await;
+            }
+        }
+    }
+
+    // 2. Recreate manager and re-fetch user info from provider
+    let mgr = ProfilesManager::new(storage, None)?;
+    let token = mgr
+        .get_auth_token(key)?
+        .ok_or_else(|| DomainError::ProfileNotFound(format!("No token found for profile: {}", key)))?;
+
+    let profile = match adapter_name {
+        "gitlab" => {
+            let gitlab_adapter = crate::adapters::gitlab::GitlabAdapter::new();
+            gitlab_adapter.fetch_profile_with_token(&token).await
+                .map_err(|e| DomainError::GitError(format!("Failed to fetch profile from GitLab: {}", e)))?
+        }
+        _ => {
+            let github_adapter = crate::adapters::github::GithubAdapter::new();
+            github_adapter.fetch_profile_with_token(&token).await
+                .map_err(|e| DomainError::GitError(format!("Failed to fetch profile from GitHub: {}", e)))?
+        }
+    };
+
+    // 3. Update profile metadata
+    mgr.update_profile_metadata(key, profile.name, profile.email)?;
+
+    // 4. Generate new SSH keypair (this will overwrite the old one locally)
+    mgr.generate_and_assign_ssh_key(key)?;
+
+    // 5. Upload new public key to provider
+    let device_id = mgr.get_device_identifier();
+    let pub_key = mgr.get_public_key_content(key)?;
+
+    let new_key_id = match adapter_name {
+        "gitlab" => {
+            let gitlab_adapter = crate::adapters::gitlab::GitlabAdapter::new();
+            gitlab_adapter.upload_ssh_key_with_token(&token, &pub_key, &device_id).await
+                .map_err(|e| DomainError::SshError(format!("Failed to upload SSH key to GitLab: {}", e)))?
+        }
+        _ => {
+            let github_adapter = crate::adapters::github::GithubAdapter::new();
+            github_adapter.upload_ssh_key_with_token(&token, &pub_key, &device_id).await
+                .map_err(|e| DomainError::SshError(format!("Failed to upload SSH key to GitHub: {}", e)))?
+        }
+    };
+
+    // 6. Update profile with new key_id
+    if let Ok(Some(mut rec)) = mgr.get_profile(key) {
+        rec.ssh_key_id = Some(new_key_id);
+        mgr.upsert_profile(key, rec)?;
+    }
+
+    // 7. If this is the current profile, update git config and SSH config
+    let git_name = mgr.get_git_config("user.name").map(|s| s.trim().to_string());
+    let git_email = mgr.get_git_config("user.email").map(|s| s.trim().to_string());
+
+    if let Ok(Some(rec)) = mgr.get_profile(key) {
+        let is_current = git_name.as_deref().map(|s| s == rec.name).unwrap_or(false) &&
+                        git_email.as_deref().map(|s| s == rec.email).unwrap_or(false);
+
+        if is_current {
+            // Update git config and SSH config with new key
             mgr.switch_profile(key)?;
         }
     }

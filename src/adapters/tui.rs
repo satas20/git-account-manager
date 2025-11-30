@@ -20,6 +20,7 @@ impl TuiAdapter {
             MainMenu,
             Help,
             Profiles,
+            ProviderSelection,
         }
 
         #[derive(PartialEq, Eq)]
@@ -71,6 +72,18 @@ impl TuiAdapter {
                         let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Menu"));
                         f.render_widget(list, chunks[1]);
                     }
+                    ScreenState::ProviderSelection => {
+                        let items = vec![
+                            ListItem::new("Select a provider:"),
+                            ListItem::new(""),
+                            ListItem::new("1 - GitHub"),
+                            ListItem::new("2 - GitLab"),
+                            ListItem::new(""),
+                            ListItem::new("b - Back"),
+                        ];
+                        let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Add New Profile - Provider Selection"));
+                        f.render_widget(list, chunks[1]);
+                    }
                     ScreenState::Help => {
                         let help_text = vec![
                             "Git Account Manager (git-acc-mngr)",
@@ -80,7 +93,7 @@ impl TuiAdapter {
                             "and SSH key management.",
                             "",
                             "BACKGROUND OPERATIONS:",
-                            "• OAuth: Authenticates with GitHub",
+                            "• OAuth: Authenticates with GitHub & GitLab",
                             "• Git Config: Updates user.name and user.email",
                             "• SSH Keys: Generates Ed25519 keys per profile",
                             "• SSH Config: Updates ~/.ssh/config",
@@ -93,9 +106,12 @@ impl TuiAdapter {
                             "• Encryption: master.key",
                             "",
                             "SETUP REQUIREMENTS:",
-                            "Set environment variables:",
+                            "GitHub:",
                             "  GITHUB_CLIENT_ID=<your_client_id>",
                             "  GITHUB_CLIENT_SECRET=<your_client_secret>",
+                            "GitLab:",
+                            "  GITLAB_APP_ID=<your_app_id>",
+                            "  GITLAB_CLIENT_SECRET=<your_client_secret>",
                             "",
                             "Press 'b' to go back",
                         ];
@@ -112,14 +128,18 @@ impl TuiAdapter {
                                     items.push(ListItem::new("(no profiles yet)"));
                                 } else {
                                     items.push(ListItem::new(""));
-                                    for (i, (_, name, email, is_current)) in profiles_list.iter().enumerate() {
-                                        let mut disp = format!("{}: {} <{}>", i + 1, name, email);
+                                    for (i, (key, name, email, is_current)) in profiles_list.iter().enumerate() {
+                                        // Extract adapter name from key (format: "username@adapter")
+                                        let adapter = key.split('@').nth(1).unwrap_or("unknown");
+                                        let mut disp = format!("{}: {} <{}> [{}]", i + 1, name, email, adapter);
                                         if *is_current {
                                             disp.push_str(" - current");
                                         }
                                         items.push(ListItem::new(disp));
                                     }
                                 }
+                                items.push(ListItem::new(""));
+                                items.push(ListItem::new("b - Back"));
                                 let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Profiles"));
                                 f.render_widget(list, chunks[1]);
                             }
@@ -134,8 +154,9 @@ impl TuiAdapter {
                                 items.push(ListItem::new(""));
                                 items.push(ListItem::new("1 - Switch profile"));
                                 items.push(ListItem::new("2 - Remove profile"));
-                                items.push(ListItem::new("3 - Update profile"));
-                                items.push(ListItem::new("4 - Back"));
+                                items.push(ListItem::new("3 - Sync account"));
+                                items.push(ListItem::new(""));
+                                items.push(ListItem::new("b - Back"));
                                 let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Profile Actions"));
                                 f.render_widget(list, chunks[1]);
                             }
@@ -148,11 +169,12 @@ impl TuiAdapter {
                     msg.clone()
                 } else {
                     match state {
-                        ScreenState::MainMenu => "Select an option: 1, 2 or q".to_string(),
+                        ScreenState::MainMenu => "Select an option: 1, 2, or q".to_string(),
                         ScreenState::Help => "Press 'b' to go back".to_string(),
+                        ScreenState::ProviderSelection => "Select a provider: 1 (GitHub), 2 (GitLab), or 'b' to go back".to_string(),
                         ScreenState::Profiles => match profiles_action {
                             ProfilesAction::None => "Press '0' to add new or select a profile, 'b' to go back".to_string(),
-                            ProfilesAction::ProfileMenu(_) => "Choose an action: 1-4 or 'b' to go back".to_string(),
+                            ProfilesAction::ProfileMenu(_) => "Choose an action: 1-3 or 'b' to go back".to_string(),
                         },
                     }
                 };
@@ -201,6 +223,57 @@ impl TuiAdapter {
                                 }
                                 _ => {}
                             },
+                            ScreenState::ProviderSelection => match key_event.code {
+                                KeyCode::Char('b') | KeyCode::Esc => {
+                                    state = ScreenState::Profiles;
+                                    message = None;
+                                }
+                                KeyCode::Char('1') => {
+                                    // GitHub provider selected - Start GitHub OAuth flow in background
+                                    message = Some("Starting GitHub OAuth... (browser should open)".to_string());
+                                    state = ScreenState::Profiles;
+
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    task_rx = Some(rx);
+
+                                    tokio::spawn(async move {
+                                        let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                        let github_adapter = crate::adapters::github::GithubAdapter::new();
+
+                                        match crate::domain::use_cases::add_github_profile_use_case(&storage, &github_adapter).await {
+                                            Ok(key) => {
+                                                let _ = tx.send(Ok(format!("Added GitHub profile: {}", key)));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Err(e.to_string()));
+                                            }
+                                        }
+                                    });
+                                }
+                                KeyCode::Char('2') => {
+                                    // GitLab provider selected - Start GitLab OAuth flow in background
+                                    message = Some("Starting GitLab OAuth... (browser should open)".to_string());
+                                    state = ScreenState::Profiles;
+
+                                    let (tx, rx) = std::sync::mpsc::channel();
+                                    task_rx = Some(rx);
+
+                                    tokio::spawn(async move {
+                                        let storage = crate::adapters::system_io::LocalSystemIO::new();
+                                        let gitlab_adapter = crate::adapters::gitlab::GitlabAdapter::new();
+
+                                        match crate::domain::use_cases::add_gitlab_profile_use_case(&storage, &gitlab_adapter).await {
+                                            Ok(key) => {
+                                                let _ = tx.send(Ok(format!("Added GitLab profile: {}", key)));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Err(e.to_string()));
+                                            }
+                                        }
+                                    });
+                                }
+                                _ => {}
+                            },
                             ScreenState::Profiles => {
                                 match profiles_action {
                                     ProfilesAction::None => match key_event.code {
@@ -215,25 +288,9 @@ impl TuiAdapter {
                                             }
                                         }
                                         KeyCode::Char('0') => {
-                                            // Start GitHub OAuth flow in background (Add new profile)
-                                            message = Some("Starting GitHub OAuth... (browser should open)".to_string());
-
-                                            let (tx, rx) = std::sync::mpsc::channel();
-                                            task_rx = Some(rx);
-
-                                            tokio::spawn(async move {
-                                                let storage = crate::adapters::system_io::LocalSystemIO::new();
-                                                let github_adapter = crate::adapters::github::GithubAdapter::new();
-
-                                                match crate::domain::use_cases::add_github_profile_use_case(&storage, &github_adapter).await {
-                                                    Ok(key) => {
-                                                        let _ = tx.send(Ok(key));
-                                                    }
-                                                    Err(e) => {
-                                                        let _ = tx.send(Err(e.to_string()));
-                                                    }
-                                                }
-                                            });
+                                            // Go to provider selection menu
+                                            state = ScreenState::ProviderSelection;
+                                            message = None;
                                         }
                                         KeyCode::Char(c) if c.is_ascii_digit() => {
                                             let idx = c.to_digit(10).unwrap_or(0) as usize;
@@ -248,7 +305,7 @@ impl TuiAdapter {
                                         _ => {}
                                     },
                                     ProfilesAction::ProfileMenu(sel) => match key_event.code {
-                                        KeyCode::Char('b') | KeyCode::Char('4') | KeyCode::Esc => {
+                                        KeyCode::Char('b') | KeyCode::Esc => {
                                             profiles_action = ProfilesAction::None;
                                             message = None;
                                         }
@@ -304,11 +361,11 @@ impl TuiAdapter {
                                             profiles_action = ProfilesAction::None;
                                         }
                                         KeyCode::Char('3') => {
-                                            // Update profile - re-fetch from GitHub (async)
+                                            // Sync account - re-fetch from provider and rotate SSH key (async)
                                             if sel < profiles_list.len() {
                                                 let (key, _, _, _) = &profiles_list[sel];
                                                 let key_clone = key.clone();
-                                                message = Some(format!("Updating profile {}...", key_clone));
+                                                message = Some(format!("Syncing account {}...", key_clone));
 
                                                 let (tx, rx) = std::sync::mpsc::channel();
                                                 task_rx = Some(rx);
@@ -316,12 +373,12 @@ impl TuiAdapter {
                                                 tokio::spawn(async move {
                                                     let storage = crate::adapters::system_io::LocalSystemIO::new();
 
-                                                    match crate::domain::use_cases::update_profile_use_case(&storage, &key_clone).await {
+                                                    match crate::domain::use_cases::sync_account_use_case(&storage, &key_clone).await {
                                                         Ok(_) => {
-                                                            let _ = tx.send(Ok(format!("Updated profile: {}", key_clone)));
+                                                            let _ = tx.send(Ok(format!("Synced account: {}", key_clone)));
                                                         }
                                                         Err(e) => {
-                                                            let _ = tx.send(Err(format!("Failed to update profile: {}", e)));
+                                                            let _ = tx.send(Err(format!("Failed to sync account: {}", e)));
                                                         }
                                                     }
                                                 });
