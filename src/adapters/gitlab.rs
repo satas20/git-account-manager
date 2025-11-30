@@ -4,7 +4,7 @@ use crate::domain::use_cases::ProfilesManager;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::env;
-
+//FİX:not working correctly 
 pub struct GitlabAdapter<'a> {
     profiles_manager: Option<ProfilesManager<'a>>,
 }
