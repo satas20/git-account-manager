@@ -30,13 +30,39 @@ Git Account Manager handles the complexity of managing multiple Git identities b
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### One-Line Installation (Recommended)
 
+**Linux, macOS, or Windows (WSL):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/satas20/git-account-manager/main/install.sh | bash
+```
+
+Then run:
+```bash
+git-acc-mngr tui
+```
+
+### Windows Users
+
+We **strongly recommend** using WSL for the best experience:
+
+1. **Install WSL** (PowerShell as Administrator):
+   ```powershell
+   wsl --install
+   ```
+
+2. **Restart** your computer
+
+3. **Open WSL** and run the installation command above
+
+> **Why WSL?** Better Git/SSH integration, consistent environment, and full Linux tooling support. The native Windows binary is available but not recommended for this tool.
+
+### Alternative: Build from Source
+
+**Prerequisites:**
 - Rust 1.70 or later
 - Git installed on your system
 - SSH installed (comes with most systems)
-
-### Installation
 
 ```bash
 # Clone the repository

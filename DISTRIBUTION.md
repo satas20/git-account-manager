@@ -20,7 +20,7 @@ Your project is now configured for **one-line installation** via curl.
 - **Builds for:**
   - Linux x86_64 (musl for maximum compatibility)
   - macOS x86_64 (Intel Macs)
-  - Windows x86_64 (MSVC)
+  - Windows x86_64 (MSVC - provided but WSL is recommended)
 
 ### 3. Install Script
 
@@ -73,15 +73,25 @@ GitHub Actions will automatically:
 
 ## 💻 Installation Methods
 
-### Method 1: One-Line Install (Linux/macOS)
+### Method 1: One-Line Install (Recommended)
 
+**For Linux, macOS, and Windows (WSL):**
 ```bash
+curl -fsSL https://raw.githubusercontent.com/satas20/git-account-manager/main/install.sh | bash
+```
+
+**Windows Users:** We strongly recommend using [WSL (Windows Subsystem for Linux)](https://learn.microsoft.com/en-us/windows/wsl/install) for the best experience:
+```powershell
+# Install WSL (PowerShell as Admin)
+wsl --install
+
+# Restart your computer, then in WSL:
 curl -fsSL https://raw.githubusercontent.com/satas20/git-account-manager/main/install.sh | bash
 ```
 
 ### Method 2: Manual Install
 
-#### Linux/macOS
+#### Linux/macOS/WSL
 
 ```bash
 # Download latest release
@@ -99,8 +109,9 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-#### Windows
+#### Windows (Native - Not Recommended)
 
+A native Windows binary is available, but WSL is strongly recommended for better Git/SSH integration:
 1. Download: `git-acc-mngr-windows-x86_64.exe.tar.gz`
 2. Extract the .exe file
 3. Add to PATH or run directly
