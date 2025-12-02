@@ -40,7 +40,7 @@ Git Account Manager handles the complexity of managing multiple Git identities b
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/git-account-manager.git
+git clone https://github.com/satas20/git-account-manager.git
 cd git-account-manager
 
 # Build the project
@@ -118,6 +118,7 @@ cargo run --release
 6. Grant permissions and return to the terminal
 
 The application will automatically:
+
 - Fetch your profile information
 - Generate an SSH key pair
 - Upload the public key to your account
@@ -250,12 +251,14 @@ The application will print the OAuth URL. Copy and paste it into your browser ma
 ### SSH keys not working
 
 Ensure the SSH key was uploaded successfully:
+
 - Check your GitHub/GitLab SSH keys settings
 - Verify the key matches: `cat ~/.config/git-account-manager/keys/username_at_github/id_ed25519.pub`
 
 ### Permission denied errors
 
 The application needs write access to:
+
 - `~/.config/git-account-manager/` - Profile storage
 - `~/.ssh/config` - SSH configuration
 - `~/.gitconfig` - Git configuration
@@ -273,8 +276,9 @@ Use the "Sync account" feature to refresh tokens and rotate SSH keys.
 ## 📧 Support
 
 For issues, questions, or suggestions:
-- Open an [issue](https://github.com/yourusername/git-account-manager/issues)
-- Check existing [discussions](https://github.com/yourusername/git-account-manager/discussions)
+
+- Open an [issue](https://github.com/satas20/git-account-manager/issues)
+- Check existing [discussions](https://github.com/satas20/git-account-manager/discussions)
 
 ---
 

@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Ata"]
 description = "A powerful terminal-based tool for managing multiple Git identities with OAuth authentication and automatic SSH key management"
 license = "MIT"
-repository = "https://github.com/yourusername/git-account-manager"
+repository = "https://github.com/satas20/git-account-manager"
 readme = "README.md"
 keywords = ["git", "oauth", "ssh", "terminal", "tui"]
 categories = ["command-line-utilities", "authentication", "development-tools"]
@@ -13,6 +13,10 @@ categories = ["command-line-utilities", "authentication", "development-tools"]
 [profile.dev]
 opt-level = 0
 debug = true
+
+[[bin]]
+name = "git-acc-mngr"
+path = "src/main.rs"
 
 [dependencies]
 
