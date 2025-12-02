@@ -57,7 +57,33 @@ We **strongly recommend** using WSL for the best experience:
 
 > **Why WSL?** Better Git/SSH integration, consistent environment, and full Linux tooling support. The native Windows binary is available but not recommended for this tool.
 
-### Alternative: Build from Source
+### Windows Native Installation (Alternative)
+
+If you prefer not to use WSL, here are the manual installation steps:
+
+**Using Git Bash or PowerShell:**
+```bash
+# Download the Windows binary
+curl -L https://github.com/satas20/git-account-manager/releases/latest/download/git-acc-mngr-windows-x86_64.exe.tar.gz -o git-acc-mngr-windows.tar.gz
+
+# Extract
+tar -xzf git-acc-mngr-windows.tar.gz
+
+# Create bin directory if it doesn't exist
+mkdir -p $HOME/.local/bin
+
+# Move binary to bin
+mv git-acc-mngr-windows-x86_64.exe $HOME/.local/bin/git-acc-mngr.exe
+
+# Add to PATH (add this to your ~/.bashrc or ~/.bash_profile)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# Now you can run it
+git-acc-mngr --help
+```
+
+### Build from Source
 
 **Prerequisites:**
 - Rust 1.70 or later
