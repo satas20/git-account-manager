@@ -1,4 +1,4 @@
-// Small starter: clap CLI + optional ratatui demo to exercise dependencies.
+// Git Account Manager - Terminal-based tool for managing multiple Git identities
 mod domain;
 mod adapters;
 
@@ -8,7 +8,12 @@ use dotenvy::dotenv;
 use crate::domain::entity::Profile;
 
 #[derive(Parser, Debug)]
-#[command(name = "accmngr", about = "AccMngr - Git Account Manager (skeleton)")]
+#[command(
+    name = "git-acc-mngr",
+    about = "Git Account Manager - Manage multiple Git identities with ease",
+    long_about = "A powerful terminal-based tool for managing multiple Git identities with OAuth authentication and automatic SSH key management.",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -16,10 +21,15 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Run the minimal TUI demo
+    /// Launch the interactive TUI (Terminal User Interface)
     Tui,
-    /// Print a demo profile
-    Profile { name: String, email: String },
+    /// Create a demo profile (for testing)
+    Profile {
+        /// Profile name
+        name: String,
+        /// Profile email address
+        email: String
+    },
 }
 
 #[tokio::main]
@@ -33,20 +43,23 @@ async fn main() -> anyhow::Result<()> {
 
     match &cli.command {
         Some(Commands::Tui) => {
-            // run the TUI adapter
+            // Explicit TUI command
             let tui = adapters::tui::TuiAdapter::new();
             if let Err(e) = tui.run() {
                 eprintln!("TUI error: {}", e);
             }
         }
         Some(Commands::Profile { name, email }) => {
+            // Demo profile command
             let p = Profile::new(name, email);
             println!("Profile: {} <{}> (host={})", p.name, p.email, p.auth_host);
         }
         None => {
-            // default behaviour: show a sample profile
-            let p = Profile::new("work", "work@example.com");
-            println!("Created profile: {} <{}> (host={})", p.name, p.email, p.auth_host);
+            // Default behavior: Launch TUI directly
+            let tui = adapters::tui::TuiAdapter::new();
+            if let Err(e) = tui.run() {
+                eprintln!("TUI error: {}", e);
+            }
         }
     }
 

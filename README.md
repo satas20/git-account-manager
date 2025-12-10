@@ -39,8 +39,10 @@ curl -fsSL https://raw.githubusercontent.com/satas20/git-account-manager/main/in
 
 Then run:
 ```bash
-git-acc-mngr tui
+git-acc-mngr
 ```
+
+The TUI (Terminal User Interface) launches automatically!
 
 ### Windows Users
 
@@ -98,8 +100,8 @@ cd git-account-manager
 # Build the project
 cargo build --release
 
-# Run the TUI
-cargo run --release
+# Run it (TUI launches automatically)
+./target/release/git-acc-mngr
 ```
 
 ### Setup OAuth Credentials
@@ -154,15 +156,15 @@ GITLAB_CLIENT_SECRET=your_gitlab_client_secret_here
 # Load environment variables
 source .env
 
-# Run the application
-cargo run --release
+# Run the application (TUI launches automatically)
+git-acc-mngr
 ```
 
 ## 📖 Usage
 
 ### Adding a Profile
 
-1. Launch the application
+1. Launch the application with `git-acc-mngr` (no arguments needed!)
 2. Press `1` to enter Profiles menu
 3. Press `0` to add a new profile
 4. Select your provider (GitHub or GitLab)
