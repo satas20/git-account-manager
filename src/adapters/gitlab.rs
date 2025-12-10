@@ -90,11 +90,24 @@ impl<'a> GitlabAdapter<'a> {
     ///
     /// Returns (access_token, refresh_token) on success.
     pub async fn start_oauth_flow_async(&self, _account: &str) -> Result<(String, Option<String>), String> {
-        // Read client credentials from env
+        // Read client credentials from compile-time env (set during build) or runtime env
+        // This allows the binary to work out-of-the-box with embedded credentials,
+        // but users can override with their own if needed.
         let client_id = env::var("GITLAB_APP_ID")
-            .map_err(|_| "Missing GITLAB_APP_ID environment variable".to_string())?;
+            .or_else(|_| option_env!("GITLAB_APP_ID").map(String::from).ok_or(()))
+            .map_err(|_| {
+                "Missing GITLAB_APP_ID.\n\
+                 Please set GITLAB_APP_ID environment variable or rebuild with embedded credentials.\n\
+                 See: https://github.com/satas20/git-account-manager#oauth-setup".to_string()
+            })?;
+
         let client_secret = env::var("GITLAB_CLIENT_SECRET")
-            .map_err(|_| "Missing GITLAB_CLIENT_SECRET environment variable".to_string())?;
+            .or_else(|_| option_env!("GITLAB_CLIENT_SECRET").map(String::from).ok_or(()))
+            .map_err(|_| {
+                "Missing GITLAB_CLIENT_SECRET.\n\
+                 Please set GITLAB_CLIENT_SECRET environment variable or rebuild with embedded credentials.\n\
+                 See: https://github.com/satas20/git-account-manager#oauth-setup".to_string()
+            })?;
 
         // callback listener
         let redirect_host = "127.0.0.1";

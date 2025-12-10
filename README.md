@@ -44,6 +44,8 @@ git-acc-mngr
 
 The TUI (Terminal User Interface) launches automatically!
 
+> **Uninstalling?** See the [Uninstall section](#-uninstalling) below.
+
 ### Windows Users
 
 We **strongly recommend** using WSL for the best experience:
@@ -287,6 +289,30 @@ RUST_LOG=debug cargo run
 - **chacha20poly1305** - Encryption
 - **serde/serde_json** - Serialization
 - **clap** - CLI argument parsing
+
+## 🗑️ Uninstalling
+
+To completely remove Git Account Manager from your system:
+
+```bash
+# Download and run the uninstall script
+curl -fsSL https://raw.githubusercontent.com/satas20/git-account-manager/main/uninstall.sh | bash
+```
+
+Or manually:
+
+```bash
+# Remove the binary (try both locations)
+rm -f ~/.local/bin/git-acc-mngr
+sudo rm -f /usr/local/bin/git-acc-mngr
+
+# (Optional) Remove all profiles and data
+rm -rf ~/.config/git-account-manager
+```
+
+**Note:** Removing `~/.config/git-account-manager` will delete all your profiles, SSH keys, and encrypted tokens. If you're just upgrading, you can keep this directory.
+
+---
 
 ## 🤝 Contributing
 
