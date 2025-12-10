@@ -43,6 +43,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
+        env:
+          GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          GITLAB_APP_ID: ${{ secrets.OAUTH_GITLAB_APP_ID }}
+          GITLAB_CLIENT_SECRET: ${{ secrets.OAUTH_GITLAB_CLIENT_SECRET }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare binary

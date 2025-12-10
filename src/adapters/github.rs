@@ -83,9 +83,24 @@ impl<'a> GithubAdapter<'a> {
     /// - exchanges the code for an access token and refresh token
     /// Returns (access_token, refresh_token) on success.
     pub async fn start_oauth_flow_async(&self, _account: &str) -> Result<(String, Option<String>), String> {
-        // Read client credentials from env
-        let client_id = env::var("GITHUB_CLIENT_ID").map_err(|_| "Missing GITHUB_CLIENT_ID environment variable".to_string())?;
-        let client_secret = env::var("GITHUB_CLIENT_SECRET").map_err(|_| "Missing GITHUB_CLIENT_SECRET environment variable".to_string())?;
+        // Read client credentials from compile-time env (set during build) or runtime env
+        // This allows the binary to work out-of-the-box with embedded credentials,
+        // but users can override with their own if needed.
+        let client_id = env::var("GITHUB_CLIENT_ID")
+            .or_else(|_| option_env!("GITHUB_CLIENT_ID").map(String::from).ok_or(()))
+            .map_err(|_| {
+                "Missing GITHUB_CLIENT_ID.\n\
+                 Please set GITHUB_CLIENT_ID environment variable or rebuild with embedded credentials.\n\
+                 See: https://github.com/satas20/git-account-manager#oauth-setup".to_string()
+            })?;
+
+        let client_secret = env::var("GITHUB_CLIENT_SECRET")
+            .or_else(|_| option_env!("GITHUB_CLIENT_SECRET").map(String::from).ok_or(()))
+            .map_err(|_| {
+                "Missing GITHUB_CLIENT_SECRET.\n\
+                 Please set GITHUB_CLIENT_SECRET environment variable or rebuild with embedded credentials.\n\
+                 See: https://github.com/satas20/git-account-manager#oauth-setup".to_string()
+            })?;
 
         // callback listener
         let redirect_host = "127.0.0.1";
