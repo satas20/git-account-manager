@@ -1,5 +1,27 @@
 # Git Account Manager 🔐
 
+```
+                          =+=:
+                        =++++++:
+                       .+++++++++.
+                    :+=  :++++++++=.
+                  :+++++-    :++++++=
+                .++++++++:    -+++++++-
+              .=+++++++++=.   .=++++++++:
+            .=++++++++++++= .-: .=++++++++:
+           -++++++++++++++= .=+=.   .=++++++.
+           =++++++++++++++= .=++:    -++++++-
+            -+++++++++++++= .=++=:..:=+++++:
+             .=+++++++++++= .=+.      :++-
+               .=++++++++-    ==-::::-=-
+                 .+++++++:    -++++++=
+                   :+++++=-:--+++++=.
+                     :++       .++.
+                       -++---=++:
+                         =++++:
+                           :.
+```
+
 A powerful terminal-based tool for managing multiple Git identities with OAuth authentication and automatic SSH key management. Switch between GitHub and GitLab accounts seamlessly with encrypted token storage and profile-based SSH configuration.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)

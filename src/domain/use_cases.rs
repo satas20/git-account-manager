@@ -464,36 +464,26 @@ impl<'a> ProfilesManager<'a> {
             .as_ref()
             .ok_or_else(|| DomainError::SshKeyNotAssigned(key.to_string()))?;
 
-        // 1. Update git config
-        let output_name = self
-            .storage
-            .execute_command("git", &["config", "user.name", &rec.name])?;
-
-        if output_name.exit_code != 0 {
-            return Err(DomainError::GitError(format!(
-                "Failed to set user.name: {}",
-                output_name.stderr
-            )));
-        }
-
-        let output_email = self
-            .storage
-            .execute_command("git", &["config", "user.email", &rec.email])?;
-
+        // 1. Update global git config (skip local config as it requires being in a git repo)
         let output_global_name = self
             .storage
             .execute_command("git", &["config", "--global", "user.name", &rec.name])?;
+
+        if output_global_name.exit_code != 0 {
+            return Err(DomainError::GitError(format!(
+                "Failed to set user.name: {}",
+                output_global_name.stderr
+            )));
+        }
 
         let output_global_email = self
             .storage
             .execute_command("git", &["config", "--global", "user.email", &rec.email])?;
 
-
- 
-        if output_email.exit_code != 0 || output_global_name.exit_code != 0 || output_global_email.exit_code != 0 {
+        if output_global_email.exit_code != 0 {
             return Err(DomainError::GitError(format!(
                 "Failed to set user.email: {}",
-                output_email.stderr
+                output_global_email.stderr
             )));
         }
 
