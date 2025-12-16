@@ -56,3 +56,6 @@ rand = "0.8"
 base64 = "0.21"
 hostname = "0.4.1"
 
+# Clipboard support
+cli-clipboard = "0.4"
+

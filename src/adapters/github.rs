@@ -125,18 +125,13 @@ impl<'a> GithubAdapter<'a> {
             urlencoding::encode(&state)
         );
 
-        // Try to open the browser
-        match webbrowser::open(&auth_url) {
-            Ok(_) => {}
-            Err(e) => {
-                return Err(format!("Failed to open browser: {}. Open this URL manually: {}", e, auth_url));
-            }
-        }
-
-        // Spawn a blocking listener to wait for the single callback request and extract `code`
+        // START CALLBACK SERVER FIRST (before trying to open browser)
+        // This ensures the server is listening even if browser opening fails
         let listen_addr = format!("{}:{}", redirect_host, redirect_port);
         let expected_state = state.clone();
-        let code = tokio::task::spawn_blocking(move || -> Result<String, String> {
+
+        // Spawn the listener in background BEFORE opening browser
+        let listener_handle = tokio::task::spawn_blocking(move || -> Result<String, String> {
             use std::io::{BufRead, BufReader, Write};
             use std::net::TcpListener;
 
@@ -185,9 +180,39 @@ impl<'a> GithubAdapter<'a> {
             stream.write_all(response.as_bytes()).ok();
 
             Ok(code)
-        })
-        .await
-        .map_err(|e| format!("Listener task join error: {}", e))?;
+        });
+
+        // Give the server a moment to start listening
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // NOW try to open the browser (server is already running)
+        match webbrowser::open(&auth_url) {
+            Ok(_) => {
+                // Browser opened successfully
+            }
+            Err(e) => {
+                // Browser failed to open - try to copy URL to clipboard
+                match cli_clipboard::set_contents(auth_url.clone()) {
+                    Ok(_) => {
+                        return Err(format!(
+                            "Failed to open browser: {}.\n\nOAuth URL copied to clipboard!\nPaste it in your browser to continue.\n\nURL: {}",
+                            e, auth_url
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "Failed to open browser: {}.\n\nOpen this URL manually: {}",
+                            e, auth_url
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Wait for the callback (server is already running)
+        let code = listener_handle
+            .await
+            .map_err(|e| format!("Listener task join error: {}", e))?;
 
         let code = match code {
             Ok(c) => c,
