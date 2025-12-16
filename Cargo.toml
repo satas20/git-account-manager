@@ -1,6 +1,6 @@
 [package]
 name = "gitt_account_manager"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Ata"]
 description = "A powerful terminal-based tool for managing multiple Git identities with OAuth authentication and automatic SSH key management"
