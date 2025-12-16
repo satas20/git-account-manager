@@ -1,25 +1,28 @@
 # Git Account Manager 🔐
 
+<p align="center">
+  <img src="git-accmngr-logo.png" alt="Git Account Manager Logo" width="200"/>
+</p>
+
 ```
-                          =+=:
-                        =++++++:
-                       .+++++++++.
-                    :+=  :++++++++=.
-                  :+++++-    :++++++=
-                .++++++++:    -+++++++-
-              .=+++++++++=.   .=++++++++:
-            .=++++++++++++= .-: .=++++++++:
-           -++++++++++++++= .=+=.   .=++++++.
-           =++++++++++++++= .=++:    -++++++-
-            -+++++++++++++= .=++=:..:=+++++:
-             .=+++++++++++= .=+.      :++-
-               .=++++++++-    ==-::::-=-
-                 .+++++++:    -++++++=
-                   :+++++=-:--+++++=.
-                     :++       .++.
-                       -++---=++:
-                         =++++:
-                           :.
+                          :==
+                        :*****=
+                        +*******+
+                     +:   ********=
+                   +****.     =*****:
+                 +*******      *******
+               -*********=     :********
+             .************-  .   -********
+            **************-  :*-     -*****=
+           -**************-  :**      ******
+             +************-  :**=    =****+
+              :***********-  :+        +*
+                =********.    :-.    .-
+                  =******     .******.
+                    =****=.  .=****-
+                      ++        *+
+                       .*-.  .=+
+                         :***+
 ```
 
 A powerful terminal-based tool for managing multiple Git identities with OAuth authentication and automatic SSH key management. Switch between GitHub and GitLab accounts seamlessly with encrypted token storage and profile-based SSH configuration.
@@ -50,6 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/satas20/git-account-manager/main/in
 #### Windows (Recommended: WSL)
 
 1. **Install WSL** (PowerShell as Administrator):
+
    ```powershell
    wsl --install
    ```
@@ -79,6 +83,7 @@ Move-Item -Force git-acc-mngr-windows-x86_64.exe "$env:USERPROFILE\.local\bin\gi
 ```
 
 After installation, restart PowerShell and verify:
+
 ```powershell
 git-acc-mngr --version
 ```
@@ -90,6 +95,7 @@ Prefer to download manually? Get the latest release for your platform:
 **[📥 Download from GitHub Releases](https://github.com/satas20/git-account-manager/releases/latest)**
 
 Available binaries:
+
 - `git-acc-mngr-linux-x86_64.tar.gz` - Linux
 - `git-acc-mngr-macos-x86_64.tar.gz` - macOS
 - `git-acc-mngr-windows-x86_64.exe.tar.gz` - Windows
@@ -115,6 +121,7 @@ The TUI (Terminal User Interface) launches automatically!
 5. Grant permissions and return to the terminal
 
 The application automatically:
+
 - Fetches your profile information
 - Generates an SSH key pair
 - Uploads the public key to your account
@@ -179,6 +186,7 @@ curl -fsSL https://raw.githubusercontent.com/satas20/git-account-manager/main/un
 ```
 
 Or manually:
+
 ```bash
 # Remove the binary
 rm -f ~/.local/bin/git-acc-mngr
