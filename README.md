@@ -118,6 +118,10 @@ Extract and move to your PATH, or follow the platform-specific instructions abov
 
 ## 📖 Usage
 
+<p align="center">
+  <img src="git-acc-mngr.GIF" width="900">
+</p>
+
 ### Launch the Application
 
 ```bash
